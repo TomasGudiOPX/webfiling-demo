@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-label="Relevamiento de obra">
+  <rect width="1280" height="720" fill="#17212d"/>
+  <rect y="470" width="1280" height="250" fill="#273747"/>
+  <path d="M110 500 290 270 470 500ZM380 500 650 180 920 500ZM760 500 1000 240 1220 500Z" fill="#61778a"/>
+  <path d="M0 560h1280M0 625h1280" stroke="#e97c25" stroke-width="8" stroke-dasharray="20 22"/>
+  <text x="72" y="100" fill="#e8eef4" font-family="Arial, sans-serif" font-size="42">RELEVAMIENTO · OBRA COSTA NORTE</text>
+  <text x="72" y="150" fill="#aebbc7" font-family="Arial, sans-serif" font-size="24">IMG_0042.jpg · pendiente de metadatos</text>
+</svg>
