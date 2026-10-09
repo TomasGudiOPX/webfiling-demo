@@ -68,6 +68,40 @@ async function setup(upgrade = false) {
 const file = (text = "contenido", name = "nota.txt") =>
   new File([text], name, { type: "text/plain" });
 
+for (const upgrade of [false, true])
+  test(`agent schema is additive and repeatable (${upgrade ? "upgraded" : "fresh"} database)`, async () => {
+    const { db, databasePath } = await setup(upgrade);
+    const before = Object.fromEntries(
+      ["files", "collection_grants", "file_events"].map((table) => [
+        table,
+        (db.prepare(`SELECT count(*) AS count FROM ${table}`).get() as { count: number }).count,
+      ]),
+    );
+    const expectedTables = [
+      "agent_runs", "agent_steps", "agent_summaries", "collection_rules",
+      "collection_rule_versions", "collection_periods", "collection_evidence",
+      "collection_rule_events", "collection_events", "agent_schedules", "scheduled_runs", "agent_notices",
+      "worker_heartbeats",
+    ];
+    for (const table of expectedTables)
+      assert.ok(
+        db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table),
+        `missing ${table}`,
+      );
+    assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+    db.close();
+    const reopened = openDatabase(databasePath);
+    seedFixtures(reopened);
+    for (const [table, count] of Object.entries(before))
+      assert.equal(
+        (reopened.prepare(`SELECT count(*) AS count FROM ${table}`).get() as { count: number }).count,
+        count,
+        `${table} changed during repeated initialization`,
+      );
+    assert.deepEqual(reopened.prepare("PRAGMA foreign_key_check").all(), []);
+    reopened.close();
+  });
+
 test("upload validation accepts supported signatures and rejects unsafe, empty, oversize, malformed content", async () => {
   const png = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aA1EAAAAASUVORK5CYII=",
@@ -162,6 +196,47 @@ test("multipart limits count streamed bytes even with absent or false content le
       )
     ).get("file") instanceof File,
   );
+});
+
+test("sample reset preserves user-created collection rules, evidence, history, and uploads", async () => {
+  const { db, databasePath } = await setup();
+  const upload = await saveManagedUpload(
+    "employee",
+    { collectionId: collection, file: file("informe real"), projectIds: ["project-costa-norte"] },
+    db,
+  );
+  const timestamp = new Date().toISOString();
+  db.prepare(
+    "INSERT INTO collection_rules (id,creator_profile_id,recipient_profile_id,collection_id,current_version,created_at,updated_at) VALUES ('user-rule','employee','employee',?,1,?,?)",
+  ).run(collection, timestamp, timestamp);
+  db.prepare(
+    "INSERT INTO collection_rule_versions (rule_id,version,definition_json,timezone,created_by,created_at) VALUES ('user-rule',1,'{}','America/Argentina/Buenos_Aires','employee',?)",
+  ).run(timestamp);
+  db.prepare(
+    "INSERT INTO collection_periods (id,rule_id,rule_version,occurrence_key,recipient_profile_id,collection_id,opens_at,closes_at,timezone,status,created_at) VALUES ('user-period','user-rule',1,'occurrence-1','employee',?,?,?,?,'received',?)",
+  ).run(collection, timestamp, "2026-10-09T00:00:00.000Z", "America/Argentina/Buenos_Aires", timestamp);
+  db.prepare(
+    "INSERT INTO collection_evidence (id,period_id,slot_key,file_id,contributor_profile_id,uploaded_at,linked_at,linked_by) VALUES ('user-evidence','user-period','report',?,'employee',?,?,'employee')",
+  ).run(upload.id, timestamp, timestamp);
+  db.prepare(
+    "INSERT INTO collection_events (id,period_id,event_type,actor_profile_id,occurred_at,details_json) VALUES ('user-event','user-period','received','employee',?,'{}')",
+  ).run(timestamp);
+  db.prepare(
+    "INSERT INTO agent_runs (id,profile_id,provider_version,intent,status,created_at) VALUES ('user-run','employee','demo-v1','upload','completed',?)",
+  ).run(timestamp);
+  resetSamples("system-administrator", db);
+  assert.ok(db.prepare("SELECT 1 FROM files WHERE id=?").get(upload.id));
+  assert.ok(db.prepare("SELECT 1 FROM collection_rules WHERE id='user-rule'").get());
+  assert.ok(db.prepare("SELECT 1 FROM collection_periods WHERE id='user-period'").get());
+  assert.ok(db.prepare("SELECT 1 FROM collection_evidence WHERE id='user-evidence'").get());
+  assert.ok(db.prepare("SELECT 1 FROM collection_events WHERE id='user-event'").get());
+  assert.ok(db.prepare("SELECT 1 FROM agent_runs WHERE id='user-run'").get());
+  const restarted = openDatabase(databasePath);
+  assert.deepEqual(restarted.prepare("PRAGMA foreign_key_check").all(), []);
+  assert.ok(restarted.prepare("SELECT 1 FROM collection_evidence WHERE id='user-evidence'").get());
+  const download = await contentResponse("employee", upload.id, true, restarted);
+  assert.equal(await download.text(), "informe real");
+  restarted.close();
 });
 
 for (const upgrade of [false, true])

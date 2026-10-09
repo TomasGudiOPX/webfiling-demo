@@ -8,6 +8,7 @@ async function profile(page: Page, id: string) {
   ]);
   await expect(page).toHaveURL(/\/file$/);
   await expect(page.getByLabel("Perfil simulado")).toHaveValue(id);
+  await page.goto("/file?browse=1");
 }
 const files = (page: Page) => page.locator("[data-file-id]");
 
@@ -300,7 +301,8 @@ for (const width of [1440, 390]) {
         await expect(files(page)).toHaveCount(1);
         await expect(files(page)).toHaveAttribute("data-file-id", selected);
       }
-      await files(page).click();
+      if (await files(page).isVisible()) await files(page).click();
+      else await expect(page.locator(".library-detail")).toBeVisible();
       await page.getByRole("button", { name: "Enviar a papelera" }).click();
       await expect(page.locator(".library-detail")).toHaveCount(0);
       expect(
@@ -423,8 +425,10 @@ test("keyboard-only folder navigation, selection, view switching and focus retur
   await expect(page.locator(".library-detail > h2")).toBeFocused();
   await tabUntil(".library-back");
   await page.keyboard.press("Enter");
-  await expect(page.locator(".library-results h2")).toBeFocused();
-  await tabUntil('.library-toolbar nav a[href*="view=grid"]');
+  await expect(page.locator(".library-results > header h2")).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Shift+Tab");
+  await expect(page.locator('.library-toolbar nav a[href*="view=grid"]')).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/view=grid/);
   expect(

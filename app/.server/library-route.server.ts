@@ -100,6 +100,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
     } else if (intent === "reset") {
       resetSamples(profile);
       url.search = "";
+      url.searchParams.set("browse", "1");
       message = "Ejemplos restablecidos; sus cargas se conservaron.";
     } else
       return Response.json(

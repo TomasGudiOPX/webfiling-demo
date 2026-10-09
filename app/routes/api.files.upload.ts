@@ -13,11 +13,23 @@ export async function action({ request }: ActionFunctionArgs) {
     const file = form.get("file");
     if (!(file instanceof File) || Array.from(form.values()).filter(value => value instanceof File).length !== 1)
       return Response.json({ error: { code: "invalid_upload", message: "One file is required." } }, { status: 400 });
+    if (form.has("runId") && (!request.headers.get("Idempotency-Key") || !form.get("stepKey")))
+      throw new FileInputError("Falta identificar la operación del agente.", 400);
     const db = openDatabase();
     seedFixtures(db);
     const upload = await saveManagedUpload(
       profile,
-      { collectionId: String(form.get("collectionId") ?? ""), file, folderId: String(form.get("folderId") ?? "") || null, projectIds: form.getAll("projectId").map(String) },
+      {
+        collectionId: String(form.get("collectionId") ?? ""), file,
+        folderId: String(form.get("folderId") ?? "") || null,
+        projectIds: form.getAll("projectId").map(String),
+        ...(request.headers.get("Idempotency-Key") ? {
+          operation: {
+            key: request.headers.get("Idempotency-Key")!,
+            ...(form.get("runId") ? { runId: String(form.get("runId")), stepKey: String(form.get("stepKey") ?? "") } : {}),
+          },
+        } : {}),
+      },
       db,
     );
     return Response.json({ file: upload }, { status: 201, headers: { "Cache-Control": "no-store" } });

@@ -200,6 +200,9 @@ export async function browserModel(
   ).map((c) => ({
     ...c,
     capabilities: collectionCapabilities(profile, c.id, db),
+    ...(profile === "system-administrator" ? { authorizedRecipients: db.prepare(
+      "SELECT p.id,p.display_name AS name FROM collection_grants g JOIN demo_profiles p ON p.id=g.profile_id WHERE g.collection_id=? AND g.can_contribute=1 AND p.is_system_administrator=0 ORDER BY p.display_name",
+    ).all(c.id) as Array<{ id: string; name: string }> } : {}),
   }));
   const params = url.searchParams;
   const { filters, invalid } = parseSearchFilters(params);
@@ -479,6 +482,19 @@ export async function browserModel(
     all,
     retired: params.has("status") || params.has("at") || params.has("retired"),
     files: matching,
+    graph: {
+      nodes: matching.map((file) => ({
+        id: file.id,
+        kind: "file" as const,
+        label: file.displayName,
+        status: file.availability,
+      })),
+      edges: edges.filter(
+        (edge) =>
+          matching.some((file) => file.id === edge.from) &&
+          matching.some((file) => file.id === edge.to),
+      ),
+    },
     count: matching.length,
     selected: selected ?? null,
     folders: [...folders.values()].filter(

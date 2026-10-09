@@ -59,6 +59,76 @@ export type FileEventType =
   | "trashed"
   | "restored";
 
+export type AgentRunStatus = "queued" | "running" | "partial" | "failed" | "completed";
+export type AgentStepStatus = "planned" | "queued" | "running" | "succeeded" | "failed" | "skipped";
+export type CollectionPeriodStatus =
+  | "upcoming" | "pending" | "partial" | "received" | "overdue"
+  | "received_late" | "cancelled" | "superseded" | "not_evaluated";
+export type ScheduledRunStatus = "queued" | "running" | "succeeded" | "failed" | "skipped" | "blocked";
+export type ScheduledAction = "collection_check" | "collection_summary";
+
+export interface AgentRunRecord {
+  id: string;
+  profileId: DemoProfileId;
+  collectionId: string | null;
+  providerVersion: string;
+  intent: string;
+  status: AgentRunStatus;
+  safeErrorCode: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface CollectionPeriodRecord {
+  id: string;
+  ruleId: string;
+  ruleVersion: number;
+  recipientProfileId: DemoProfileId;
+  collectionId: string;
+  opensAt: string;
+  closesAt: string;
+  timezone: string;
+  status: CollectionPeriodStatus;
+}
+
+export interface AgentScheduleRecord {
+  id: string;
+  ownerProfileId: DemoProfileId;
+  collectionId: string;
+  ruleId: string | null;
+  actionType: ScheduledAction;
+  timezone: string;
+  cronExpression: string;
+  nextRunAt: string | null;
+  pausedAt: string | null;
+  version: number;
+}
+
+export interface CollectionRuleSlot {
+  key: string;
+  label: string;
+  requiredCount: number;
+  allowedExtensions: string[];
+  criteria: {
+    filenameIncludes?: string;
+    categoryId?: DocumentCategoryId;
+    disciplineTag?: DisciplineTagId;
+    locationTag?: LocationTagId;
+  };
+}
+
+export interface CollectionRuleDefinition {
+  slots: CollectionRuleSlot[];
+  organizationDefaults: {
+    categoryId?: DocumentCategoryId;
+    disciplineTag?: DisciplineTagId;
+    locationTag?: LocationTagId;
+    folderId?: string | null;
+  };
+  recurrence: Record<string, unknown>;
+}
+
 export interface FileCollection {
   id: string;
   name: string;

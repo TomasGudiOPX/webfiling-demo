@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import type { RelationGraph as RelationGraphData } from "../types";
 import type { SearchFilters } from "../search-filters";
@@ -16,24 +16,31 @@ export function RelationGraph({
   projectSlug,
   preserve,
   onSelect,
+  fileHref,
 }: {
   graph: RelationGraphData;
   selectedId?: string;
   projectSlug: string;
   preserve: Partial<SearchFilters>;
   onSelect?: () => void;
+  fileHref?: (fileId: string) => string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneRef = useRef<RelationScene | null>(null);
   const navigate = useNavigate();
+  const [paused, setPaused] = useState(false);
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
   const selectedRef = useRef(selectedId);
   selectedRef.current = selectedId;
-  const navRef = useRef({ projectSlug, preserve });
-  navRef.current = { projectSlug, preserve };
+  const navRef = useRef({ projectSlug, preserve, fileHref });
+  navRef.current = { projectSlug, preserve, fileHref };
 
   const linkFor = (nodeId: string) => {
-    const { projectSlug, preserve } = navRef.current;
-    return workspaceUrl(projectSlug, preserve, nodeId);
+    const { projectSlug, preserve, fileHref } = navRef.current;
+    return fileHref
+      ? fileHref(nodeId)
+      : workspaceUrl(projectSlug, preserve, nodeId);
   };
 
   const activate = (nodeId: string) => {
@@ -45,7 +52,7 @@ export function RelationGraph({
 
   const graphKey = useMemo(
     () =>
-      graph.nodes.map((node) => node.id).join("|") +
+      JSON.stringify(graph.nodes) +
       "::" +
       graph.edges
         .map((edge) => `${edge.from}->${edge.to}:${edge.type}`)
@@ -59,7 +66,10 @@ export function RelationGraph({
     const scene = new RelationScene(
       canvas,
       graph,
-      () => ({ selectedId: selectedRef.current ?? null }),
+      () => ({
+        selectedId: selectedRef.current ?? null,
+        paused: pausedRef.current,
+      }),
       (nodeId) => activateRef.current(nodeId),
     );
     sceneRef.current = scene;
@@ -71,7 +81,7 @@ export function RelationGraph({
 
   useEffect(() => {
     sceneRef.current?.refresh();
-  }, [selectedId]);
+  }, [selectedId, paused]);
 
   const relationTypes = useMemo(
     () => [...new Set(graph.edges.map((edge) => edge.type))],
@@ -83,15 +93,32 @@ export function RelationGraph({
   );
 
   return (
-    <div className="relation-graph" data-testid="relation-graph">
+    <div className="relation-graph brain-graph" data-testid="relation-graph">
+      <div className="brain-heading">
+        <div>
+          <span className="brain-kicker">RED DOCUMENTAL</span>
+          <p>Los archivos, conectados</p>
+        </div>
+        <button
+          type="button"
+          aria-pressed={paused}
+          onClick={() => setPaused(!paused)}
+        >
+          {paused ? "Reanudar animación" : "Pausar animación"}
+        </button>
+      </div>
       <div className="relation-scene">
         <canvas
           ref={canvasRef}
           className="relation-canvas"
           role="img"
-          aria-label="Red de relaciones entre documentos de la obra. Arrastrá los nodos para reordenarlos."
+          aria-label="Mapa cerebral de relaciones entre archivos. Seleccioná un punto naranja o un archivo en la lista para abrirlo."
         />
       </div>
+      <p className="brain-hint">
+        Puntos naranjas: archivos. Líneas destacadas: vínculos registrados. La
+        malla tenue ilustra la forma del cerebro.
+      </p>
 
       <svg width="0" height="0" aria-hidden="true" className="relation-defs">
         <defs>
@@ -120,6 +147,7 @@ export function RelationGraph({
               preventScrollReset
               onClick={onSelect}
               aria-label={`${node.label}, ${STATUS_LABELS[node.status] ?? node.status}`}
+              aria-current={node.id === selectedId ? "true" : undefined}
             >
               {node.label}
             </Link>
@@ -127,10 +155,7 @@ export function RelationGraph({
         ))}
       </ul>
 
-      <div
-        className="graph-legend"
-        aria-label="Leyenda del mapa de relaciones"
-      >
+      <div className="graph-legend" aria-label="Leyenda del mapa de relaciones">
         {relationTypes.map((type) => {
           const style = RELATION_STYLES[type] ?? {
             color: "var(--muted)",
@@ -146,7 +171,9 @@ export function RelationGraph({
                   y2="5"
                   stroke={style.color}
                   strokeWidth="2"
-                  strokeDasharray={style.dash ? style.dash.join(" ") : undefined}
+                  strokeDasharray={
+                    style.dash ? style.dash.join(" ") : undefined
+                  }
                   markerEnd={style.arrow ? "url(#graph-arrow)" : undefined}
                 />
               </svg>

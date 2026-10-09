@@ -1,0 +1,486 @@
+/* Preserve the original showcase's typography, project cards and split workspace.
+   Storage, access and the three views continue using the shared library model. */
+.restored-showcase,
+.showcase-workspace.library-shell {
+  max-width: 1600px;
+  padding: 28px 40px 64px;
+  margin: auto;
+}
+.showcase-topbar {
+  gap: 20px;
+}
+.showcase-topbar .brand {
+  font-size: 28px;
+  letter-spacing: -1.5px;
+  font-weight: 800;
+}
+.showcase-profile label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.showcase-profile select {
+  font: inherit;
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface);
+  width: 200px;
+}
+.showcase-topbar .topbar-actions {
+  flex-wrap: wrap;
+  margin-right: 48px;
+}
+.restored-showcase a {
+  text-decoration: none;
+}
+.restored-showcase :is(a, button, input, select):focus-visible {
+  outline: 2px solid var(--orange);
+  outline-offset: 4px;
+}
+.restored-showcase .catalog-hero {
+  padding: 30px 0 22px;
+}
+.restored-showcase .hero-content {
+  max-width: 900px;
+}
+.restored-showcase .hero-content h1 {
+  max-width: 850px;
+}
+.showcase-search {
+  max-width: 850px;
+  margin: 10px 0 40px;
+}
+.showcase-search label {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.showcase-search > div {
+  display: flex;
+  gap: 10px;
+}
+.showcase-search input {
+  min-width: 0;
+  flex: 1;
+  padding: 14px 18px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+}
+.restored-showcase .scenario-cards-container {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 285px), 1fr));
+}
+.restored-showcase .scenario-card {
+  min-height: 245px;
+}
+.restored-showcase .scenario-card > strong {
+  font-size: 24px;
+  letter-spacing: -0.6px;
+}
+.restored-showcase .scenario-health {
+  flex-wrap: wrap;
+}
+.restored-showcase .scenario-action-row {
+  margin-top: auto;
+}
+.showcase-collections {
+  margin: 36px 0;
+}
+.showcase-collection-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.showcase-collection-links a {
+  display: grid;
+  gap: 8px;
+  flex: 1;
+  min-width: 220px;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+}
+.showcase-collection-links span {
+  font-size: 12px;
+  color: var(--muted);
+}
+.collection-calendar { margin: 42px auto; max-width: 1180px; padding: 24px; border: 1px solid var(--line, #dce2e5); border-radius: 18px; background: var(--surface, #fff); }
+.collection-calendar .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.collection-calendar ol { list-style: none; padding: 0; margin: 18px 0 0; }
+.collection-calendar li { display: grid; grid-template-columns: 112px 1fr auto; gap: 16px; align-items: center; padding: 14px 0; border-top: 1px solid var(--line, #dce2e5); }
+.collection-calendar li time { font-weight: 700; }
+.collection-calendar li div { display: grid; gap: 4px; }
+.collection-calendar li div span, .collection-calendar li small { color: var(--muted, #667); }
+.collection-calendar .calendar-status { text-transform: capitalize; font-size: 12px; }
+.calendar-month-heading { display: flex; align-items: center; justify-content: center; gap: 22px; margin: 16px 0; }
+.calendar-month-heading h3 { min-width: 180px; margin: 0; text-align: center; text-transform: capitalize; }
+.calendar-month-heading button { min-width: 40px; min-height: 40px; border: 1px solid var(--line, #dce2e5); border-radius: 50%; background: transparent; font-size: 22px; }
+.calendar-month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-top: 1px solid var(--line, #dce2e5); border-left: 1px solid var(--line, #dce2e5); }
+.calendar-month-grid > span { padding: 8px; text-align: center; font-size: 12px; color: var(--muted, #667); }
+.calendar-day { min-height: 92px; padding: 6px; border-right: 1px solid var(--line, #dce2e5); border-bottom: 1px solid var(--line, #dce2e5); overflow: hidden; }
+.calendar-day time { display: block; margin-bottom: 4px; font-size: 12px; }
+.calendar-day a { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.calendar-day.outside-month { background: color-mix(in srgb, var(--surface, #fff) 80%, var(--muted, #667)); opacity: .62; }
+.calendar-agenda-title { margin: 22px 0 8px; }
+.calendar-agenda { margin: 0; }
+.calendar-agenda li { grid-template-columns: 120px 1fr; }
+.calendar-agenda li details { min-width: 0; }
+.calendar-agenda li summary { cursor: pointer; }
+.calendar-agenda li details p, .calendar-agenda li details ul { margin: 8px 0; }
+@media (max-width: 600px) { .collection-calendar li { grid-template-columns: 1fr auto; gap: 8px; } .collection-calendar li time { grid-column: 1 / -1; } }
+@media (max-width: 600px) { .calendar-month-grid { display: none; } .calendar-agenda-title { margin-top: 10px; } .calendar-agenda li { grid-template-columns: 1fr; } }
+.showcase-workspace .library-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding-top: 14px;
+}
+.showcase-workspace .library-sidebar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  border: 0;
+  padding: 0 0 18px;
+  font-size: 11px;
+}
+.showcase-workspace .library-sidebar > h2,
+.showcase-workspace .library-sidebar > .library-note {
+  display: none;
+}
+.showcase-workspace .library-sidebar a {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  margin: 0;
+}
+.showcase-workspace .library-sidebar a small {
+  display: none;
+}
+.showcase-workspace .library-sidebar details {
+  margin: 0;
+}
+.showcase-workspace .library-sidebar details[open] {
+  flex-basis: 100%;
+}
+.showcase-workspace .library-sidebar details[open] a {
+  display: inline-block;
+  margin: 4px;
+}
+.showcase-workspace .library-title {
+  padding: 6px 0 20px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.showcase-workspace .library-title h1 {
+  font-size: clamp(28px, 3vw, 42px);
+  font-weight: 800;
+  letter-spacing: -1.5px;
+}
+.showcase-workspace .project-subtitle {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.showcase-workspace .library-search-line input {
+  font-size: 16px;
+  padding: 16px;
+}
+.showcase-workspace .library-search-line button {
+  padding: 16px 26px;
+}
+.showcase-workspace .library-content {
+  gap: 28px;
+}
+.showcase-workspace .library-results > header h2 {
+  font-size: 15px;
+  font-weight: 600;
+}
+.showcase-workspace .library-files:not(.view-grid) {
+  border: 0;
+  background: transparent;
+  gap: 10px;
+  overflow: visible;
+}
+.showcase-workspace .library-file {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px;
+}
+.showcase-workspace .library-file:hover {
+  border-color: var(--line-strong);
+}
+.showcase-workspace .library-file.selected {
+  border-color: var(--orange);
+}
+.showcase-workspace .library-file-info strong {
+  font-size: 14px;
+}
+.showcase-workspace .library-file-icon {
+  color: var(--orange);
+  border-color: var(--orange-glow);
+  background: var(--orange-subtle);
+}
+.showcase-workspace .library-detail,
+.showcase-preview-placeholder {
+  width: 40%;
+  max-width: 520px;
+  min-width: 340px;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.showcase-workspace .library-detail > h2 {
+  font-size: 19px;
+}
+.showcase-workspace .library-detail .pdf-embed {
+  height: 400px;
+}
+.showcase-workspace .library-detail .pdf-preview-box {
+  max-height: 470px;
+}
+.showcase-preview-placeholder {
+  flex-shrink: 0;
+  min-height: 360px;
+  position: relative;
+  overflow: hidden;
+}
+.showcase-preview-placeholder h2 {
+  font-size: 24px;
+  line-height: 1.25;
+  margin: 30px 0 18px;
+}
+.showcase-preview-placeholder p:not(.eyebrow) {
+  font-size: 14px;
+  color: var(--muted);
+  max-width: 300px;
+}
+.showcase-preview-mark {
+  position: absolute;
+  right: 26px;
+  bottom: 10px;
+  font-size: 90px;
+  color: var(--line-strong);
+}
+.showcase-map {
+  margin-top: 24px;
+}
+.showcase-map > summary {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.showcase-map .relation-panel {
+  margin-top: 12px;
+}
+.showcase-map .relation-sr-links {
+  position: static;
+  width: auto;
+  height: auto;
+  clip: auto;
+  white-space: normal;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+  list-style: none;
+  overflow: visible;
+}
+.showcase-map .relation-sr-links a {
+  display: block;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.brain-graph {
+  background: #191d16;
+  border: 1px solid #444d36;
+  border-radius: 24px;
+  overflow: hidden;
+  color: #e4e9da;
+}
+.brain-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px;
+  border-bottom: 1px solid #333c29;
+}
+.brain-kicker {
+  color: #9baa8a;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+}
+.brain-heading p {
+  margin: 4px 0 0;
+  font-size: 20px;
+}
+.brain-heading button {
+  color: #cad4bf;
+  background: #222a1b;
+  border: 1px solid #485a37;
+  border-radius: 20px;
+  padding: 10px 14px;
+  min-height: 44px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.brain-graph .relation-canvas {
+  height: 420px;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  background: radial-gradient(ellipse at 50% 45%, #b0c58606, transparent 65%);
+  touch-action: pan-y;
+}
+.brain-hint {
+  padding: 0 22px;
+  color: #a5b393;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.showcase-map .brain-graph .relation-sr-links {
+  padding: 0 20px;
+}
+.showcase-map .brain-graph .relation-sr-links a {
+  color: #cad4bf;
+  background: #222a1b;
+  border: 1px solid #485a37;
+  border-radius: 20px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.showcase-map .brain-graph .relation-sr-links a[aria-current],
+.showcase-map .brain-graph .relation-sr-links a:hover {
+  color: #ffc097;
+  border-color: #c07843;
+  background: #342518;
+}
+.brain-graph .graph-legend {
+  padding: 4px 22px 20px;
+  color: #a5b393;
+}
+@media (max-width: 600px) {
+  .brain-heading {
+    padding: 16px;
+    flex-wrap: wrap;
+  }
+  .brain-graph .relation-canvas {
+    height: 340px;
+  }
+}
+body:has(.showcase-workspace, .restored-showcase) .theme-toggle {
+  position: absolute;
+  top: 42px;
+  right: max(40px, calc((100vw - 1600px) / 2 + 40px));
+  bottom: auto;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+}
+body:has(.showcase-workspace, .restored-showcase) .theme-toggle-label {
+  display: none;
+}
+@media (max-width: 1000px) {
+  .showcase-workspace .library-content {
+    gap: 16px;
+  }
+  .showcase-workspace .library-detail,
+  .showcase-preview-placeholder {
+    min-width: 290px;
+    padding: 18px;
+  }
+  .showcase-topbar .badge-tag {
+    display: none;
+  }
+}
+@media (max-width: 800px) {
+  .restored-showcase,
+  .showcase-workspace.library-shell {
+    padding: 16px 16px 60px;
+  }
+  .showcase-topbar {
+    flex-wrap: wrap;
+  }
+  .showcase-topbar .topbar-actions {
+    gap: 10px;
+    margin-right: 0;
+  }
+  .showcase-topbar .brand-group {
+    padding-right: 40px;
+  }
+  body:has(.showcase-workspace, .restored-showcase) .theme-toggle {
+    top: 25px;
+    right: 16px;
+    width: 30px;
+    height: 30px;
+  }
+  .showcase-profile label {
+    display: grid;
+    gap: 3px;
+  }
+  .showcase-profile select {
+    width: 170px;
+  }
+  .showcase-topbar .brand {
+    font-size: 24px;
+  }
+  .showcase-topbar .back-link {
+    font-size: 11px;
+  }
+  .restored-showcase .hero-content h1 {
+    font-size: 38px;
+  }
+  .restored-showcase .lede {
+    font-size: 16px;
+  }
+  .showcase-search input {
+    font-size: 14px;
+    padding: 12px;
+  }
+  .showcase-workspace .library-sidebar {
+    margin: 0;
+  }
+  .showcase-workspace .library-sidebar details {
+    display: block;
+  }
+  .showcase-workspace .library-title h1 {
+    font-size: 27px;
+  }
+  .showcase-workspace .library-title {
+    flex-wrap: wrap;
+  }
+  .showcase-workspace .library-detail {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+  }
+  .showcase-preview-placeholder {
+    display: none;
+  }
+  .showcase-workspace .library-file {
+    padding: 12px;
+  }
+  .showcase-workspace .library-search-line button {
+    padding: 16px;
+  }
+  .restored-showcase .catalog-section-heading {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+}

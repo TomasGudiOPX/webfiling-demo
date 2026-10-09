@@ -11,7 +11,10 @@ import type { browserModel, BrowserFile } from "../.server/file-browser.server";
 import { DOCUMENT_CATEGORIES, DISCIPLINE_TAGS, LOCATION_TAGS } from "../types";
 import { DOCUMENT_TYPE_IDS } from "../search-filters";
 import { DocumentPreview } from "./document-preview";
+import { RelationGraph } from "./relation-graph";
+import { ShowcaseHeader } from "./showcase-header";
 import "../styles/library.css";
+import "../styles/showcase.css";
 
 type Model = Awaited<ReturnType<typeof browserModel>>;
 const profiles = {
@@ -252,12 +255,18 @@ export default function FileLibrary() {
   }, [model.selected?.id, model.profile]);
   const href = (values: Record<string, string | null>, root = false) => {
     const params = new URLSearchParams(location.search);
+    params.set("browse", "1");
     params.delete("message");
     for (const [key, value] of Object.entries(values))
       value ? params.set(key, value) : params.delete(key);
     return (
       (root ? "/file" : location.pathname) + (params.size ? "?" + params : "")
     );
+  };
+  const withActivePanel = (target: string) => {
+    const panel = new URLSearchParams(location.search).get("panel");
+    if (panel !== "agent" && panel !== "calendar" && panel !== "rules") return target;
+    return `${target}${target.includes("?") ? "&" : "?"}panel=${panel}`;
   };
   const current = model.selected;
   const selectedCollection = model.collections.find(
@@ -277,40 +286,14 @@ export default function FileLibrary() {
     ancestor = model.folders.find((f) => f.id === ancestor!.parentId) ?? null;
   }
   return (
-    <main className={`library-shell ${current ? "has-selection" : ""}`}>
-      <header className="library-header">
-        <Link to="/file" className="library-brand">
-          WEBFILING <span>/ Archivos</span>
-        </Link>
-        <form
-          method="post"
-          action="/api/demo-profile"
-          className="library-profile"
-        >
-          <label>
-            Perfil simulado
-            <select
-              aria-label="Perfil simulado"
-              name="profileId"
-              value={model.profile}
-              onChange={(e) => e.currentTarget.form?.requestSubmit()}
-            >
-              {Object.entries(profiles).map(([id, name]) => (
-                <option key={id} value={id}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <noscript>
-            <button>Cambiar perfil</button>
-          </noscript>
-        </form>
-      </header>
+    <main
+      className={`shell workspace-shell library-shell showcase-workspace ${current ? "has-selection" : ""}`}
+    >
+      <ShowcaseHeader profile={model.profile} workspace />
       <div className="library-layout">
         <nav className="library-sidebar" aria-label="Colecciones y proyectos">
           <Link
-            to="/file"
+            to={href({ selected: null, evidence: null }, true)}
             className={
               !model.collectionId && !model.project && !model.trash
                 ? "active"
@@ -350,7 +333,7 @@ export default function FileLibrary() {
           <details>
             <summary>Proyectos vinculados</summary>
             {model.projects.map((p) => (
-              <Link key={p.id} to={`/file/${p.slug}`}>
+              <Link key={p.id} to={withActivePanel(`/file/${p.slug}`)}>
                 {p.name}
               </Link>
             ))}
@@ -379,9 +362,13 @@ export default function FileLibrary() {
           )}
         </nav>
         <section className="library-main">
-          <header className="library-title">
+          <header className="library-title project-heading">
             <div>
-              <p className="eyebrow">BIBLIOTECA DE ARCHIVOS</p>
+              <p className="eyebrow">
+                {model.project
+                  ? "ESPACIO DE OBRA / DOCUMENTOS"
+                  : "ARCHIVO DOCUMENTAL / COLECCIONES"}
+              </p>
               <h1>
                 {model.trash
                   ? "Papelera"
@@ -389,6 +376,10 @@ export default function FileLibrary() {
                     selectedCollection?.name ??
                     "Todos los archivos")}
               </h1>
+              <p className="project-subtitle">
+                Archivos, versiones y relaciones · Originales del servidor
+                protegidos
+              </p>
             </div>
             {!model.trash &&
               model.collections.some((c) => c.capabilities.canContribute) && (
@@ -422,6 +413,8 @@ export default function FileLibrary() {
             className="library-search"
             key={JSON.stringify(model.filters)}
           >
+            <input type="hidden" name="browse" value="1" />
+            {new URLSearchParams(location.search).get("panel") && <input type="hidden" name="panel" value={new URLSearchParams(location.search).get("panel")!} />}
             <input type="hidden" name="view" value={model.view} />
             {model.collectionId && (
               <input
@@ -560,7 +553,7 @@ export default function FileLibrary() {
           {model.invalid.length > 0 && (
             <p role="status">
               Algunos filtros no son válidos.{" "}
-              <Link to="/file">Restablecer filtros</Link>
+              <Link to="/file?browse=1">Restablecer filtros</Link>
             </p>
           )}
           <nav className="library-breadcrumbs" aria-label="Ruta de carpetas">
@@ -731,7 +724,51 @@ export default function FileLibrary() {
                   </Link>
                 ))}
               </div>
+              {!model.trash && model.graph.nodes.length > 0 && (
+                <details className="advanced-map-disclosure showcase-map">
+                  <summary>Mapa de documentos y relaciones</summary>
+                  <div className="panel relation-panel">
+                    <div className="section-heading">
+                      <div>
+                        <p className="eyebrow">CONTEXTO Y VERSIONES</p>
+                        <h2>Mapa de documentos</h2>
+                      </div>
+                    </div>
+                    <RelationGraph
+                      graph={model.graph}
+                      selectedId={current?.id}
+                      projectSlug={model.project?.slug ?? ""}
+                      preserve={model.filters}
+                      fileHref={(id) => href({ selected: id, evidence: null })}
+                    />
+                    <p className="muted">
+                      El mapa muestra los archivos de esta búsqueda y sus
+                      vínculos registrados.
+                    </p>
+                  </div>
+                </details>
+              )}
             </section>
+            {!current && !model.trash && (
+              <aside
+                className="showcase-preview-placeholder"
+                aria-label="Vista previa"
+              >
+                <p className="eyebrow">DOCUMENTO Y CONTEXTO</p>
+                <h2>
+                  Todo sobre un archivo,
+                  <br />
+                  en el mismo lugar.
+                </h2>
+                <p>
+                  Selecciona un documento para ver su contenido, ubicación,
+                  etiquetas, versiones y archivos relacionados.
+                </p>
+                <span className="showcase-preview-mark" aria-hidden="true">
+                  ↗
+                </span>
+              </aside>
+            )}
             {current && (
               <aside
                 className="library-detail"
@@ -806,7 +843,7 @@ export default function FileLibrary() {
                   current.projects.map((p) => (
                     <p key={p.projectId}>
                       <Link
-                        to={`/file/${model.projects.find((project) => project.id === p.projectId)?.slug}?selected=${current.id}`}
+                        to={withActivePanel(`/file/${model.projects.find((project) => project.id === p.projectId)?.slug}?selected=${current.id}`)}
                       >
                         {
                           model.projects.find(

@@ -13,18 +13,9 @@ import {
 } from "./db.server";
 import { collectionCapabilities, fileCapabilities } from "./file-access.server";
 import { FileInputError, safeDisplayName } from "./upload-validation.server";
-
-export function transaction<T>(db: DatabaseSync, work: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const result = work();
-    db.exec("COMMIT");
-    return result;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-}
+import { transaction } from "./sqlite-transaction.server";
+import { reconcileFileEvidence } from "./collection-evidence.server";
+export { transaction } from "./sqlite-transaction.server";
 export function fileEvent(
   db: DatabaseSync,
   fileId: string,
@@ -32,9 +23,10 @@ export function fileEvent(
   type: string,
   before: unknown,
   after: unknown,
+  provenance?: { runId: string; stepKey: string },
 ) {
   db.prepare(
-    "INSERT INTO file_events (id,file_id,event_type,actor_id,occurred_at,before_json,after_json) VALUES (?,?,?,?,?,?,?)",
+    "INSERT INTO file_events (id,file_id,event_type,actor_id,occurred_at,before_json,after_json,agent_run_id,agent_step_key) VALUES (?,?,?,?,?,?,?,?,?)",
   ).run(
     randomUUID(),
     fileId,
@@ -43,6 +35,8 @@ export function fileEvent(
     new Date().toISOString(),
     JSON.stringify(before),
     JSON.stringify(after),
+    provenance?.runId ?? null,
+    provenance?.stepKey ?? null,
   );
 }
 export function allowedProjects(profile: DemoProfileId, db: DatabaseSync) {
@@ -121,8 +115,9 @@ export function editLibraryFile(
   fileId: string,
   edits: FileEdits,
   db = openDatabase(),
+  provenance?: { runId: string; stepKey: string },
 ) {
-  return transaction(db, () => {
+  const result = transaction(db, () => {
     const caps = fileCapabilities(profile, fileId, db);
     const before = db
       .prepare(
@@ -174,7 +169,7 @@ export function editLibraryFile(
       db.prepare(
         "UPDATE files SET category_id=?,discipline_tag=?,location_tag=?,updated_at=? WHERE id=?",
       ).run(after.categoryId, after.discipline, after.location, now, fileId);
-      fileEvent(db, fileId, profile, "metadata_changed", previous, after);
+      fileEvent(db, fileId, profile, "metadata_changed", previous, after, provenance);
     }
     if (edits.projectIds !== undefined) {
       const requested = validateProjectLinks(profile, edits.projectIds, db);
@@ -205,7 +200,7 @@ export function editLibraryFile(
           now,
           fileId,
         );
-        fileEvent(db, fileId, profile, "projects_changed", oldIds, ids);
+        fileEvent(db, fileId, profile, "projects_changed", oldIds, ids, provenance);
       }
     }
     if (name !== before.display_name) {
@@ -219,6 +214,7 @@ export function editLibraryFile(
         "renamed",
         { displayName: before.display_name },
         { displayName: name },
+        provenance,
       );
     }
     if (
@@ -235,11 +231,14 @@ export function editLibraryFile(
         "moved",
         { folderId: before.managed_folder_id },
         { folderId: edits.folderId },
+        provenance,
       );
     }
     rebuildSearchIndex(db);
     return { id: fileId };
   });
+  reconcileFileEvidence(fileId, "metadata_changed", db);
+  return result;
 }
 export function setTrashed(
   profile: DemoProfileId,
@@ -247,7 +246,7 @@ export function setTrashed(
   trashed: boolean,
   db = openDatabase(),
 ) {
-  return transaction(db, () => {
+  const result = transaction(db, () => {
     const caps = fileCapabilities(profile, fileId, db);
     const file = db
       .prepare(
@@ -297,6 +296,8 @@ export function setTrashed(
     );
     return { id: fileId };
   });
+  reconcileFileEvidence(fileId, trashed ? "trashed" : "restored", db);
+  return result;
 }
 export function resetSamples(profile: DemoProfileId, db = openDatabase()) {
   if (profile !== "system-administrator")
@@ -311,6 +312,11 @@ export function resetSamples(profile: DemoProfileId, db = openDatabase()) {
     db.exec(
       "DELETE FROM files WHERE id IN (SELECT file_id FROM library_file_metadata WHERE sample_owned=1 AND origin='managed_upload')",
     );
+    const folders = db.prepare(`WITH RECURSIVE sample_tree(id,depth) AS (
+      SELECT id,0 FROM managed_folders WHERE id='sample-construction-root'
+      UNION ALL SELECT child.id,sample_tree.depth+1 FROM managed_folders child JOIN sample_tree ON child.parent_id=sample_tree.id
+    ) SELECT id FROM sample_tree ORDER BY depth DESC`).all() as Array<{id:string}>;
+    for (const folder of folders) db.prepare("DELETE FROM managed_folders WHERE id=?").run(folder.id);
   });
   resetDemoFixtures(db);
 }

@@ -1,9 +1,11 @@
 import type { RelationGraph } from "../types";
-
-const W = 720;
-const H = 320;
+import { brainFilePositions, createBrainMesh } from "./brain-geometry";
 
 export const STATUS_COLORS: Record<string, string> = {
+  available: "#10b981",
+  unavailable: "#8e9a8e",
+  processing: "#38bdf8",
+  error: "#f87171",
   approved: "#10b981",
   pending_review: "#f59e0b",
   pending_ingestion: "#38bdf8",
@@ -13,6 +15,10 @@ export const STATUS_COLORS: Record<string, string> = {
 };
 
 export const STATUS_LABELS: Record<string, string> = {
+  available: "Contenido disponible",
+  unavailable: "Contenido no disponible",
+  processing: "Procesando archivo",
+  error: "Error de archivo",
   approved: "Vigente",
   pending_review: "Pendiente de revisión",
   pending_ingestion: "Pendiente de ingestión",
@@ -34,113 +40,15 @@ export const RELATION_STYLES: Record<string, RelationStyle> = {
   "awaiting confirmation": {
     color: "#f59e0b",
     dash: [6, 5],
-    label: "requiere confirmación",
+    label: "vínculo sugerido",
   },
 };
 
-const TEXT = "#f3f5f2";
 const TEXT_DIM = "#bac5ba";
 const BG = "#0b0d0c";
-const SURFACE = "#1a201c";
 const MUTED = "#8e9a8e";
 
-function hashCode(value: string) {
-  let hash = 0;
-  for (let i = 0; i < value.length; i++) {
-    hash = (hash << 5) - hash + value.charCodeAt(i);
-    hash |= 0;
-  }
-  return Math.abs(hash);
-}
-
-function mulberry32(seed: number) {
-  return function () {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 type Point = { x: number; y: number };
-
-export function layoutNodes(
-  nodes: RelationGraph["nodes"],
-  edges: RelationGraph["edges"],
-) {
-  const rand = mulberry32(hashCode(nodes.map((node) => node.id).join("|")));
-  const positions = new Map<string, Point>(
-    nodes.map((node) => [
-      node.id,
-      { x: 80 + rand() * (W - 160), y: 70 + rand() * (H - 150) },
-    ]),
-  );
-  const velocities = new Map<string, Point>(
-    nodes.map((node) => [node.id, { x: 0, y: 0 }]),
-  );
-  const restLength = 165;
-
-  for (let iteration = 0; iteration < 600; iteration++) {
-    for (let i = 0; i < nodes.length; i++) {
-      for (let j = i + 1; j < nodes.length; j++) {
-        const a = positions.get(nodes[i].id)!;
-        const b = positions.get(nodes[j].id)!;
-        let dx = a.x - b.x;
-        let dy = a.y - b.y;
-        let distanceSquared = dx * dx + dy * dy;
-        if (distanceSquared < 1) {
-          dx = rand() - 0.5;
-          dy = rand() - 0.5;
-          distanceSquared = 1;
-        }
-        const distance = Math.sqrt(distanceSquared);
-        const force = 3200 / distanceSquared;
-        const forceX = (dx / distance) * force;
-        const forceY = (dy / distance) * force;
-        velocities.get(nodes[i].id)!.x += forceX;
-        velocities.get(nodes[i].id)!.y += forceY;
-        velocities.get(nodes[j].id)!.x -= forceX;
-        velocities.get(nodes[j].id)!.y -= forceY;
-      }
-    }
-
-    for (const edge of edges) {
-      const a = positions.get(edge.from);
-      const b = positions.get(edge.to);
-      if (!a || !b) continue;
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const distance = Math.max(1, Math.hypot(dx, dy));
-      const force = (distance - restLength) * 0.025;
-      const forceX = (dx / distance) * force;
-      const forceY = (dy / distance) * force;
-      velocities.get(edge.from)!.x += forceX;
-      velocities.get(edge.from)!.y += forceY;
-      velocities.get(edge.to)!.x -= forceX;
-      velocities.get(edge.to)!.y -= forceY;
-    }
-
-    for (const node of nodes) {
-      const position = positions.get(node.id)!;
-      const velocity = velocities.get(node.id)!;
-      velocity.x += (W / 2 - position.x) * 0.0022;
-      velocity.y += (H / 2 - position.y) * 0.0022;
-      velocity.x *= 0.86;
-      velocity.y *= 0.86;
-      position.x = Math.max(42, Math.min(W - 42, position.x + velocity.x));
-      position.y = Math.max(42, Math.min(H - 42, position.y + velocity.y));
-    }
-  }
-
-  return positions;
-}
-
-function extensionOf(label: string) {
-  const dot = label.lastIndexOf(".");
-  if (dot <= 0) return "DOC";
-  return label.slice(dot + 1, dot + 4).toUpperCase();
-}
 
 function truncate(value: string, max: number) {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
@@ -173,14 +81,10 @@ interface ProjectedNode {
 
 interface SceneState {
   selectedId: string | null;
+  paused?: boolean;
 }
 
-function quadPoint(
-  from: Point,
-  ctrl: Point,
-  to: Point,
-  t: number,
-): Point {
+function quadPoint(from: Point, ctrl: Point, to: Point, t: number): Point {
   const u = 1 - t;
   return {
     x: u * u * from.x + 2 * u * t * ctrl.x + t * t * to.x,
@@ -198,7 +102,7 @@ export class RelationScene {
   private readonly context: CanvasRenderingContext2D;
   private readonly nodes: SceneNode[];
   private readonly edges: SceneEdge[];
-  private readonly stars: { x: number; y: number; r: number; o: number }[];
+  private readonly mesh = createBrainMesh();
   private readonly resizeObserver: ResizeObserver;
   private readonly intersectionObserver: IntersectionObserver;
   private readonly reduceMotion: MediaQueryList;
@@ -231,16 +135,16 @@ export class RelationScene {
     if (!context) throw new Error("Canvas 2D is unavailable");
     this.context = context;
 
-    const positions = layoutNodes(graph.nodes, graph.edges);
+    const positions = brainFilePositions(graph.nodes.map((node) => node.id));
     this.nodes = graph.nodes.map((node) => {
-      const p = positions.get(node.id) ?? { x: W / 2, y: H / 2 };
+      const p = positions.get(node.id)!;
       return {
         id: node.id,
         label: node.label,
         status: node.status,
-        nx: (p.x - W / 2) / (W / 2),
-        ny: (p.y - H / 2) / (H / 2),
-        nz: ((hashCode(node.id) % 1000) / 1000 - 0.5) * 0.6,
+        nx: p.x,
+        ny: p.y,
+        nz: p.z,
         ox: 0,
         oy: 0,
       };
@@ -248,16 +152,6 @@ export class RelationScene {
     this.edges = graph.edges.filter(
       (edge) => positions.has(edge.from) && positions.has(edge.to),
     );
-
-    const starSeed = mulberry32(
-      hashCode(graph.nodes.map((node) => node.id).join("|")) + 7,
-    );
-    this.stars = Array.from({ length: 46 }, () => ({
-      x: starSeed() * W,
-      y: starSeed() * H,
-      r: 0.5 + starSeed() * 1.3,
-      o: 0.05 + starSeed() * 0.22,
-    }));
 
     this.reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -290,7 +184,10 @@ export class RelationScene {
 
   private running() {
     return (
-      !this.reduceMotion.matches && this.visible && !document.hidden
+      !this.state().paused &&
+      !this.reduceMotion.matches &&
+      this.visible &&
+      !document.hidden
     );
   }
 
@@ -332,11 +229,25 @@ export class RelationScene {
 
     const cx = w * 0.5;
     const cy = h * 0.5;
-    const scaleX = w * 0.48;
-    const scaleY = h * 0.46;
-    const angle = 0.06 * Math.sin(this.elapsed * 0.00012) + this.tiltX;
-    const pitch = Math.sin(this.elapsed * 0.00036) * 0.04 + this.tiltY;
-    const breathing = 1 + Math.sin(this.elapsed * 0.0017) * 0.012;
+    const scaleX = Math.min(w * 0.38, h * 0.51);
+    const scaleY = Math.min(h * 0.4, w * 0.46);
+    const angle = 0.18 + 0.12 * Math.sin(this.elapsed * 0.00018) + this.tiltX;
+    const pitch = Math.sin(this.elapsed * 0.00036) * 0.14 + this.tiltY;
+    const breathing = 1 + Math.sin(this.elapsed * 0.0017) * 0.022;
+    const project = (point: { x: number; y: number; z: number }) => {
+      const x = point.x * breathing,
+        y = point.y * breathing;
+      const rx = x * Math.cos(angle) + point.z * Math.sin(angle);
+      const rz = -x * Math.sin(angle) + point.z * Math.cos(angle);
+      const ry = y * Math.cos(pitch) - rz * Math.sin(pitch);
+      const z = y * Math.sin(pitch) + rz * Math.cos(pitch);
+      const perspective = 2.8 / (2.8 - z * 0.38);
+      return {
+        x: cx + rx * scaleX * perspective,
+        y: cy + ry * scaleY * perspective,
+        depth: Math.max(0, Math.min(1, (z + 1) / 2)),
+      };
+    };
 
     const glow = ctx.createRadialGradient(
       cx,
@@ -351,17 +262,21 @@ export class RelationScene {
     ctx.fillStyle = glow;
     ctx.fillRect(0, 0, w, h);
 
-    for (const star of this.stars) {
-      ctx.fillStyle = "#c0cbaa";
-      ctx.globalAlpha = star.o;
+    const mesh = this.mesh.points.map(project);
+    for (const [i, j] of this.mesh.edges) {
+      const a = mesh[i],
+        b = mesh[j];
+      ctx.strokeStyle = `rgba(184,203,164,${0.08 + (a.depth + b.depth) * 0.1})`;
+      ctx.lineWidth = 0.65;
       ctx.beginPath();
-      ctx.arc(
-        (star.x / W) * w,
-        (star.y / H) * h,
-        star.r,
-        0,
-        Math.PI * 2,
-      );
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+    for (const point of mesh) {
+      ctx.fillStyle = `rgba(206,218,189,${0.25 + point.depth * 0.45})`;
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 1.1 + point.depth * 1.2, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
@@ -369,8 +284,8 @@ export class RelationScene {
     this.projected = this.nodes.map((node) => {
       const drift = Math.sin(this.elapsed * 0.0011 + node.nz * 9) * 0.004;
       const driftY = Math.cos(this.elapsed * 0.0013 + node.nz * 7) * 0.004;
-      const x = (node.nx * breathing) + drift;
-      const y = (node.ny * breathing) + driftY;
+      const x = node.nx * breathing + drift;
+      const y = node.ny * breathing + driftY;
       const z = node.nz;
       const rx = x * Math.cos(angle) + z * Math.sin(angle);
       const rz = -x * Math.sin(angle) + z * Math.cos(angle);
@@ -383,14 +298,12 @@ export class RelationScene {
         x: cx + rx * scaleX * perspective + node.ox,
         y: cy + ry * scaleY * perspective + node.oy,
         depth,
-        radius: 17 + depth * 8,
+        radius: 5 + depth * 3,
       };
     });
     const byId = new Map(this.projected.map((p) => [p.id, p]));
 
-    const connected = selectedId
-      ? this.computeConnected(selectedId)
-      : null;
+    const connected = selectedId ? this.computeConnected(selectedId) : null;
 
     this.edges.forEach((edge, index) => {
       const a = byId.get(edge.from);
@@ -402,9 +315,7 @@ export class RelationScene {
       };
       const isActive =
         !connected || edge.from === selectedId || edge.to === selectedId;
-      const alpha = isActive
-        ? 0.5 + (a.depth + b.depth) * 0.2
-        : 0.12;
+      const alpha = isActive ? 0.5 + (a.depth + b.depth) * 0.2 : 0.12;
 
       const midX = (a.x + b.x) / 2;
       const midY = (a.y + b.y) / 2;
@@ -442,14 +353,15 @@ export class RelationScene {
       }
 
       const labelPoint = quadPoint(a, ctrl, b, 0.5);
-      this.text(
-        ctx,
-        style.label,
-        labelPoint.x,
-        labelPoint.y - 8,
-        "9px Geist Mono, monospace",
-        isActive ? TEXT_DIM : "rgba(186,197,186,0.35)",
-      );
+      if (selectedId === edge.from || selectedId === edge.to)
+        this.text(
+          ctx,
+          style.label,
+          labelPoint.x,
+          labelPoint.y - 8,
+          "9px Geist Mono, monospace",
+          isActive ? TEXT_DIM : "rgba(186,197,186,0.35)",
+        );
 
       if (this.animating && isActive) {
         const t = (this.elapsed / 1400 + index * 0.37) % 1;
@@ -461,7 +373,7 @@ export class RelationScene {
     this.nodes.forEach((node) => {
       const p = byId.get(node.id);
       if (!p) return;
-      const color = STATUS_COLORS[node.status] ?? "#c0cbaa";
+      const color = "#ff9c62";
       const isSelected = node.id === selectedId;
       const isDimmed = connected ? !connected.has(node.id) : false;
       const nodeAlpha = isDimmed ? 0.28 : 1;
@@ -475,9 +387,9 @@ export class RelationScene {
         ctx.shadowColor = color;
         ctx.shadowBlur = 14;
       }
-      ctx.fillStyle = SURFACE;
+      ctx.fillStyle = "#ff9c62";
       ctx.strokeStyle = color;
-      ctx.lineWidth = 2.5;
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
       ctx.fill();
@@ -487,16 +399,7 @@ export class RelationScene {
 
       this.text(
         ctx,
-        extensionOf(node.label),
-        p.x,
-        p.y + 1,
-        "700 11px Geist Mono, monospace",
-        TEXT,
-      );
-
-      this.text(
-        ctx,
-        truncate(node.label, 20),
+        truncate(node.label, w < 400 ? 14 : 25),
         p.x,
         p.y + p.radius + 13,
         isSelected ? "600 11px Geist, sans-serif" : "11px Geist, sans-serif",
@@ -629,7 +532,7 @@ export class RelationScene {
   };
 
   private readonly onPointerUp = (event: PointerEvent) => {
-    if (this.dragNodeId && !this.moved) {
+    if (event.type !== "pointercancel" && this.dragNodeId && !this.moved) {
       this.onSelect(this.dragNodeId);
     }
     this.dragNodeId = null;

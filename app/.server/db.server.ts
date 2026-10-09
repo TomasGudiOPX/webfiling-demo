@@ -39,7 +39,40 @@ CREATE TABLE IF NOT EXISTS library_file_metadata (file_id TEXT PRIMARY KEY REFER
 CREATE INDEX IF NOT EXISTS idx_library_collection ON library_file_metadata(collection_id, trashed_at);
 CREATE TABLE IF NOT EXISTS demo_profiles (id TEXT PRIMARY KEY CHECK(id IN ('employee','manager','administration-staff','system-administrator')), display_name TEXT NOT NULL, is_system_administrator INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS collection_grants (profile_id TEXT NOT NULL REFERENCES demo_profiles(id) ON DELETE CASCADE, collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE, can_read INTEGER NOT NULL DEFAULT 0, can_contribute INTEGER NOT NULL DEFAULT 0, can_organize INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(profile_id, collection_id), CHECK(can_organize=0 OR can_contribute=1), CHECK(can_contribute=0 OR can_read=1));
-CREATE TABLE IF NOT EXISTS file_events (id TEXT PRIMARY KEY, file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE, event_type TEXT NOT NULL, actor_id TEXT NOT NULL, occurred_at TEXT NOT NULL, before_json TEXT, after_json TEXT);
+CREATE TABLE IF NOT EXISTS agent_runs (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES demo_profiles(id), collection_id TEXT REFERENCES collections(id), provider_version TEXT NOT NULL, intent TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('queued','running','partial','failed','completed')), request_key TEXT, request_fingerprint TEXT, safe_error_code TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL, sample_owned INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS agent_plans (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES demo_profiles(id), provider_version TEXT NOT NULL, operation_json TEXT NOT NULL, reason TEXT NOT NULL, target_fingerprint TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('ready','applied','stale')), expires_at TEXT NOT NULL, created_at TEXT NOT NULL, applied_run_id TEXT REFERENCES agent_runs(id));
+CREATE INDEX IF NOT EXISTS idx_agent_plans_profile_created ON agent_plans(profile_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS agent_upload_operations (profile_id TEXT NOT NULL REFERENCES demo_profiles(id), operation_key TEXT NOT NULL, payload_fingerprint TEXT NOT NULL, file_id TEXT NOT NULL REFERENCES files(id), run_id TEXT REFERENCES agent_runs(id), step_key TEXT, created_at TEXT NOT NULL, PRIMARY KEY(profile_id,operation_key));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runs_profile_request ON agent_runs(profile_id,request_key) WHERE request_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_runs_profile_created ON agent_runs(profile_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS agent_steps (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE, step_key TEXT NOT NULL, action_type TEXT NOT NULL, target_ids_json TEXT NOT NULL DEFAULT '[]', target_fingerprint TEXT, state TEXT NOT NULL CHECK(state IN ('planned','queued','running','succeeded','failed','skipped')), reason TEXT NOT NULL, result_json TEXT, idempotency_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(run_id,step_key));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_steps_idempotency ON agent_steps(idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE TABLE IF NOT EXISTS agent_summaries (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE, file_id TEXT NOT NULL REFERENCES files(id), source_fingerprint TEXT NOT NULL, source_file_updated_at TEXT NOT NULL DEFAULT '', source_metadata_updated_at TEXT NOT NULL DEFAULT '', extraction_method TEXT NOT NULL, excerpt_text TEXT NOT NULL, truncated INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, UNIQUE(run_id,file_id,source_fingerprint));
+CREATE INDEX IF NOT EXISTS idx_agent_summaries_file ON agent_summaries(file_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS collection_rules (id TEXT PRIMARY KEY, creator_profile_id TEXT NOT NULL REFERENCES demo_profiles(id), managing_profile_id TEXT REFERENCES demo_profiles(id), management_blocked INTEGER NOT NULL DEFAULT 0, recipient_profile_id TEXT NOT NULL REFERENCES demo_profiles(id), collection_id TEXT NOT NULL REFERENCES collections(id), project_id TEXT REFERENCES projects(id), managed_folder_id TEXT REFERENCES managed_folders(id) ON DELETE SET NULL, current_version INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, archived_at TEXT, paused_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, sample_owned INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS idx_collection_rules_recipient ON collection_rules(recipient_profile_id,collection_id,enabled,archived_at);
+CREATE TABLE IF NOT EXISTS collection_rule_events (id TEXT PRIMARY KEY, rule_id TEXT NOT NULL REFERENCES collection_rules(id), actor_profile_id TEXT NOT NULL REFERENCES demo_profiles(id), event_type TEXT NOT NULL, version INTEGER NOT NULL, occurred_at TEXT NOT NULL, details_json TEXT NOT NULL DEFAULT '{}');
+CREATE INDEX IF NOT EXISTS idx_collection_rule_events_rule_time ON collection_rule_events(rule_id,occurred_at,id);
+CREATE TABLE IF NOT EXISTS collection_rule_versions (rule_id TEXT NOT NULL REFERENCES collection_rules(id) ON DELETE CASCADE, version INTEGER NOT NULL, definition_json TEXT NOT NULL, timezone TEXT NOT NULL, opening_cron TEXT, window_start TEXT, window_end TEXT, window_minutes INTEGER, created_by TEXT NOT NULL REFERENCES demo_profiles(id), created_at TEXT NOT NULL, PRIMARY KEY(rule_id,version));
+CREATE TABLE IF NOT EXISTS collection_periods (id TEXT PRIMARY KEY, rule_id TEXT NOT NULL REFERENCES collection_rules(id), rule_version INTEGER NOT NULL, occurrence_key TEXT NOT NULL, recipient_profile_id TEXT NOT NULL REFERENCES demo_profiles(id), collection_id TEXT NOT NULL REFERENCES collections(id), opens_at TEXT NOT NULL, closes_at TEXT NOT NULL, timezone TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('upcoming','pending','partial','received','overdue','received_late','cancelled','not_evaluated')), evaluated_at TEXT, cancelled_at TEXT, cancellation_reason TEXT, superseded_at TEXT, created_at TEXT NOT NULL, UNIQUE(rule_id,occurrence_key), FOREIGN KEY(rule_id,rule_version) REFERENCES collection_rule_versions(rule_id,version));
+CREATE INDEX IF NOT EXISTS idx_collection_periods_scope ON collection_periods(collection_id,recipient_profile_id,opens_at,closes_at);
+CREATE INDEX IF NOT EXISTS idx_collection_periods_due ON collection_periods(status,closes_at);
+CREATE TABLE IF NOT EXISTS collection_evidence (id TEXT PRIMARY KEY, period_id TEXT NOT NULL REFERENCES collection_periods(id), slot_key TEXT NOT NULL, file_id TEXT NOT NULL REFERENCES files(id), contributor_profile_id TEXT NOT NULL REFERENCES demo_profiles(id), uploaded_at TEXT NOT NULL, linked_at TEXT NOT NULL, linked_by TEXT NOT NULL REFERENCES demo_profiles(id), is_late INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, inactive_reason TEXT, UNIQUE(period_id,file_id));
+CREATE INDEX IF NOT EXISTS idx_collection_evidence_slot ON collection_evidence(period_id,slot_key,active);
+CREATE INDEX IF NOT EXISTS idx_collection_evidence_file ON collection_evidence(file_id,active);
+CREATE TABLE IF NOT EXISTS collection_events (id TEXT PRIMARY KEY, period_id TEXT NOT NULL REFERENCES collection_periods(id), event_type TEXT NOT NULL, actor_profile_id TEXT REFERENCES demo_profiles(id), occurred_at TEXT NOT NULL, details_json TEXT NOT NULL DEFAULT '{}');
+CREATE INDEX IF NOT EXISTS idx_collection_events_period_time ON collection_events(period_id,occurred_at,id);
+CREATE TABLE IF NOT EXISTS agent_schedules (id TEXT PRIMARY KEY, owner_profile_id TEXT NOT NULL REFERENCES demo_profiles(id), managing_profile_id TEXT REFERENCES demo_profiles(id), management_blocked INTEGER NOT NULL DEFAULT 0, collection_id TEXT NOT NULL REFERENCES collections(id), rule_id TEXT REFERENCES collection_rules(id), action_type TEXT NOT NULL CHECK(action_type IN ('collection_check','collection_summary')), schedule_kind TEXT NOT NULL DEFAULT 'recurring' CHECK(schedule_kind IN ('once','recurring')), timezone TEXT NOT NULL, cron_expression TEXT NOT NULL DEFAULT '', run_at TEXT, next_run_at TEXT, paused_at TEXT, archived_at TEXT, version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, sample_owned INTEGER NOT NULL DEFAULT 0, CHECK((schedule_kind='once' AND run_at IS NOT NULL) OR (schedule_kind='recurring' AND cron_expression!='')));
+CREATE INDEX IF NOT EXISTS idx_agent_schedules_due ON agent_schedules(paused_at,archived_at,next_run_at);
+CREATE INDEX IF NOT EXISTS idx_agent_schedules_scope ON agent_schedules(owner_profile_id,collection_id);
+CREATE TABLE IF NOT EXISTS scheduled_runs (id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL REFERENCES agent_schedules(id), occurrence_key TEXT NOT NULL, action_type TEXT NOT NULL CHECK(action_type IN ('collection_check','collection_summary','period_generation')), status TEXT NOT NULL CHECK(status IN ('queued','running','succeeded','failed','skipped','blocked')), trigger_kind TEXT NOT NULL CHECK(trigger_kind IN ('scheduled','manual')), attempt_count INTEGER NOT NULL DEFAULT 0, available_at TEXT NOT NULL, lease_owner TEXT, lease_expires_at TEXT, result_json TEXT, safe_error_code TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL, UNIQUE(schedule_id,occurrence_key));
+CREATE TABLE IF NOT EXISTS agent_schedule_events (id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL REFERENCES agent_schedules(id), actor_profile_id TEXT NOT NULL REFERENCES demo_profiles(id), event_type TEXT NOT NULL, version INTEGER NOT NULL, occurred_at TEXT NOT NULL, details_json TEXT NOT NULL DEFAULT '{}');
+CREATE INDEX IF NOT EXISTS idx_agent_schedule_events_scope ON agent_schedule_events(schedule_id,occurred_at,id);
+CREATE INDEX IF NOT EXISTS idx_scheduled_runs_claim ON scheduled_runs(status,available_at,lease_expires_at);
+CREATE TABLE IF NOT EXISTS agent_notices (id TEXT PRIMARY KEY, period_id TEXT NOT NULL REFERENCES collection_periods(id), recipient_profile_id TEXT NOT NULL REFERENCES demo_profiles(id), notice_kind TEXT NOT NULL CHECK(notice_kind IN ('due_soon','overdue')), missing_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, dismissed_at TEXT, UNIQUE(period_id,recipient_profile_id,notice_kind));
+CREATE INDEX IF NOT EXISTS idx_agent_notices_recipient ON agent_notices(recipient_profile_id,dismissed_at,created_at DESC);
+CREATE TABLE IF NOT EXISTS worker_heartbeats (worker_id TEXT PRIMARY KEY, started_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, last_success_at TEXT, status TEXT NOT NULL CHECK(status IN ('running','stopped','error')), safe_error_code TEXT);
+CREATE TABLE IF NOT EXISTS file_events (id TEXT PRIMARY KEY, file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE, event_type TEXT NOT NULL, actor_id TEXT NOT NULL, occurred_at TEXT NOT NULL, before_json TEXT, after_json TEXT, agent_run_id TEXT, agent_step_key TEXT);
 CREATE INDEX IF NOT EXISTS idx_file_events_file_time ON file_events(file_id, occurred_at, id);
 CREATE TABLE IF NOT EXISTS file_relations (id INTEGER PRIMARY KEY AUTOINCREMENT, from_file_id TEXT NOT NULL REFERENCES files(id), to_file_id TEXT NOT NULL REFERENCES files(id), relation TEXT NOT NULL, UNIQUE(from_file_id, to_file_id, relation));
 CREATE TABLE IF NOT EXISTS reviews (id INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT NOT NULL REFERENCES files(id), reviewer TEXT NOT NULL, decision TEXT NOT NULL, reason TEXT, reviewed_at TEXT NOT NULL, classification_snapshot TEXT NOT NULL);
@@ -85,6 +118,53 @@ function migrate(db: SqliteDatabase) {
       (column) => column.name,
     ),
   );
+  const existingScheduleColumns = new Set(
+    (db.prepare("PRAGMA table_info(agent_schedules)").all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  );
+  const existingRuleColumns = new Set(
+    (db.prepare("PRAGMA table_info(collection_rules)").all() as Array<{ name: string }>).map((column) => column.name),
+  );
+  const existingPeriodColumns = new Set(
+    (db.prepare("PRAGMA table_info(collection_periods)").all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  );
+  const existingFileEventColumns = new Set(
+    (db.prepare("PRAGMA table_info(file_events)").all() as Array<{ name: string }>).map((column) => column.name),
+  );
+  const existingSummaryColumns = new Set(
+    (db.prepare("PRAGMA table_info(agent_summaries)").all() as Array<{ name: string }>).map((column) => column.name),
+  );
+  for (const column of ["source_file_updated_at", "source_metadata_updated_at"] as const) {
+    if (!existingSummaryColumns.has(column)) db.exec(`ALTER TABLE agent_summaries ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`);
+  }
+  for (const column of ["agent_run_id", "agent_step_key"] as const) {
+    if (!existingFileEventColumns.has(column)) db.exec(`ALTER TABLE file_events ADD COLUMN ${column} TEXT`);
+  }
+  if (!existingPeriodColumns.has("superseded_at"))
+    db.exec("ALTER TABLE collection_periods ADD COLUMN superseded_at TEXT");
+  for (const [column, definition] of [
+    ["schedule_kind", "TEXT NOT NULL DEFAULT 'recurring'"],
+    ["run_at", "TEXT"],
+    ["archived_at", "TEXT"],
+  ] as const) {
+    if (!existingScheduleColumns.has(column))
+      db.exec(`ALTER TABLE agent_schedules ADD COLUMN ${column} ${definition}`);
+  }
+  for (const [column, definition] of [["managing_profile_id", "TEXT REFERENCES demo_profiles(id)"], ["management_blocked", "INTEGER NOT NULL DEFAULT 0"]] as const) {
+    if (!existingRuleColumns.has(column)) db.exec(`ALTER TABLE collection_rules ADD COLUMN ${column} ${definition}`);
+  }
+  for (const [column, definition] of [["managing_profile_id", "TEXT REFERENCES demo_profiles(id)"], ["management_blocked", "INTEGER NOT NULL DEFAULT 0"]] as const) {
+    if (!existingScheduleColumns.has(column)) db.exec(`ALTER TABLE agent_schedules ADD COLUMN ${column} ${definition}`);
+  }
+  db.exec(`
+    UPDATE collection_rules SET managing_profile_id='system-administrator' WHERE managing_profile_id IS NULL AND creator_profile_id='system-administrator';
+    UPDATE collection_rules SET management_blocked=1 WHERE managing_profile_id IS NULL AND creator_profile_id!='system-administrator';
+    UPDATE agent_schedules SET managing_profile_id='system-administrator' WHERE managing_profile_id IS NULL AND owner_profile_id='system-administrator';
+    UPDATE agent_schedules SET management_blocked=1,paused_at=COALESCE(paused_at,updated_at),version=version+1 WHERE managing_profile_id IS NULL AND owner_profile_id!='system-administrator' AND management_blocked=0;
+  `);
   for (const column of ["project_id", "sample_owned"] as const) {
     if (!existingCollectionColumns.has(column)) {
       const clause =

@@ -64,6 +64,11 @@ test("shared browser preserves cross-view identities, selection, folder search a
       db,
     );
     assert.equal(model.count, 1);
+    assert.deepEqual(
+      model.graph.nodes.map((node) => node.id),
+      model.files.map((file) => file.id),
+    );
+    assert.equal(model.graph.edges.length, 0);
     assert.equal(model.selected?.id, upload.id);
     assert.ok(
       model.folders.some(
@@ -133,6 +138,12 @@ test("shared browser preserves cross-view identities, selection, folder search a
   );
   assert.equal(selected.latestId, null);
   assert.ok(!JSON.stringify(selected).includes("parque-memoria"));
+  const graphIds = new Set(selected.graph.nodes.map((node) => node.id));
+  assert.ok(
+    selected.graph.edges.every(
+      (edge) => graphIds.has(edge.from) && graphIds.has(edge.to),
+    ),
+  );
   for (const key of [
     "reviewer",
     "reviewedAt",

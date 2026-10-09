@@ -36,6 +36,20 @@ services:
     depends_on:
       web:
         condition: service_healthy
+  agent-worker:
+    build: .
+    command: ["npm", "run", "agent-worker"]
+    restart: unless-stopped
+    environment:
+      DATABASE_PATH: /app/data/webfiling.sqlite
+      SOURCE_ROOT: /app/source
+      MANAGED_STORAGE_ROOT: /app/managed-files
+      DEMO_MODE: ${DEMO_MODE:-true}
+      SESSION_SECRET: ${SESSION_SECRET:-demo-only-secret}
+    volumes:
+      - webfiling-data:/app/data
+      - ${SOURCE_ROOT_HOST:-./fixtures}:/app/source:ro
+      - webfiling-managed-files:/app/managed-files
 volumes:
   webfiling-data:
   webfiling-managed-files:

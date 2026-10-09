@@ -12,6 +12,7 @@
     "format:check": "prettier --check .",
     "seed": "tsx scripts/seed.ts",
     "indexer": "tsx scripts/indexer.ts --once",
+    "agent-worker": "tsx scripts/agent-worker.ts",
     "storage:cleanup": "tsx scripts/cleanup-managed.ts",
     "test:indexer": "node --import tsx --test tests/*.test.ts",
     "test:e2e": "playwright test"
@@ -19,6 +20,7 @@
   "dependencies": {
     "@react-router/node": "8.4.0",
     "@react-router/serve": "8.4.0",
+    "cron-parser": "5.10.1",
     "isbot": "5.1.31",
     "mammoth": "^1.13.0",
     "react": "19.2.7",
@@ -26,7 +28,7 @@
     "react-router": "8.4.0"
   },
   "devDependencies": {
-    "@playwright/test": "1.55.0",
+    "@playwright/test": "^1.64.0",
     "@react-router/dev": "8.4.0",
     "@types/node": "24.3.0",
     "@types/react": "19.1.10",
