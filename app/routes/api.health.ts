@@ -8,6 +8,6 @@ export function loader() {
     status: "ok",
     mode: config.demoMode ? "fixture" : "indexed",
     database: "sqlite",
-    index: getHealth(db),
+    index: { status: getHealth(db).status },
   });
 }

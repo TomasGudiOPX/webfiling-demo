@@ -12,6 +12,7 @@
     "format:check": "prettier --check .",
     "seed": "tsx scripts/seed.ts",
     "indexer": "tsx scripts/indexer.ts --once",
+    "storage:cleanup": "tsx scripts/cleanup-managed.ts",
     "test:indexer": "node --import tsx --test tests/*.test.ts",
     "test:e2e": "playwright test"
   },

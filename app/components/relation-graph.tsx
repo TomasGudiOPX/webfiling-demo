@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef } from "react";
 import { Link, useNavigate } from "react-router";
 import type { RelationGraph as RelationGraphData } from "../types";
+import type { SearchFilters } from "../search-filters";
+import { workspaceUrl } from "../search-filters";
 import {
   RelationScene,
   RELATION_STYLES,
@@ -18,7 +20,7 @@ export function RelationGraph({
   graph: RelationGraphData;
   selectedId?: string;
   projectSlug: string;
-  preserve: Record<string, string>;
+  preserve: Partial<SearchFilters>;
   onSelect?: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -31,13 +33,7 @@ export function RelationGraph({
 
   const linkFor = (nodeId: string) => {
     const { projectSlug, preserve } = navRef.current;
-    const params = new URLSearchParams();
-    for (const [key, value] of Object.entries(preserve)) {
-      if (value !== undefined && value !== null && value !== "")
-        params.set(key, value);
-    }
-    params.set("selected", nodeId);
-    return `/file/${projectSlug}?${params.toString()}`;
+    return workspaceUrl(projectSlug, preserve, nodeId);
   };
 
   const activate = (nodeId: string) => {

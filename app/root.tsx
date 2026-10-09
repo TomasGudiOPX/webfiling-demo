@@ -44,7 +44,7 @@ export function ErrorBoundary() {
       <h1>No pudimos cargar este espacio</h1>
       <p>{message}</p>
       <a className="button" href="/file">
-        Volver a proyectos
+        Volver a archivos
       </a>
     </main>
   );

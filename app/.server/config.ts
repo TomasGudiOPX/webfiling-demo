@@ -4,6 +4,7 @@ export interface AppConfig {
   port: number;
   databasePath: string;
   sourceRoot: string;
+  managedStorageRoot: string;
   demoMode: boolean;
   indexIntervalSeconds: number;
   sessionSecret: string;
@@ -41,10 +42,25 @@ export function getConfig(): AppConfig {
     process.env.DATABASE_PATH ?? "./data/webfiling.sqlite",
   );
   const sourceRoot = path.resolve(process.env.SOURCE_ROOT ?? "./fixtures");
+  const managedStorageRoot = path.resolve(
+    process.env.MANAGED_STORAGE_ROOT ?? "./data/managed-files",
+  );
+  const publicRoot = path.resolve("./public");
+  for (const root of [sourceRoot, publicRoot]) {
+    if (
+      managedStorageRoot === root ||
+      managedStorageRoot.startsWith(root + path.sep) ||
+      root.startsWith(managedStorageRoot + path.sep)
+    )
+      throw new Error(
+        "Configuration error: MANAGED_STORAGE_ROOT must not overlap source or public roots.",
+      );
+  }
   return {
     port,
     databasePath,
     sourceRoot,
+    managedStorageRoot,
     demoMode,
     indexIntervalSeconds,
     sessionSecret,

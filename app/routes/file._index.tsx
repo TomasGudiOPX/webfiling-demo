@@ -1,11 +1,14 @@
-import { Link } from "react-router";
+import { Link, type LoaderFunctionArgs } from "react-router";
 import {
   getHealth,
   listFindings,
   listProjectFiles,
   listProjects,
+  openDatabase,
   seedFixtures,
 } from "../.server/db.server";
+import { readableFileIds } from "../.server/file-access.server";
+import { resolveDemoProfile } from "../.server/profile-session.server";
 import {
   getReviewQueueSummary,
   listRecentDecisions,
@@ -13,13 +16,21 @@ import {
 } from "../.server/governance.server";
 import { scenarioRegistry } from "../scenarios";
 
-export function loader() {
-  seedFixtures();
-  const projects = listProjects();
-  const reviewItems = listReviewItems({});
+export function loader({ request }: LoaderFunctionArgs) {
+  const db = openDatabase();
+  seedFixtures(db);
+  const readableIds = new Set(readableFileIds(resolveDemoProfile(request), db));
+  const projects = listProjects(db).filter((project) =>
+    listProjectFiles(project.id, db).some((file) => readableIds.has(file.id)),
+  );
+  const reviewItems = listReviewItems({}, db).filter((item) =>
+    readableIds.has(item.fileId),
+  );
   const openItems = reviewItems.filter((item) => item.state !== "completed");
   const projectHealth = projects.map((project) => {
-    const files = listProjectFiles(project.id);
+    const files = listProjectFiles(project.id, db).filter((file) =>
+      readableIds.has(file.id),
+    );
     const openFindings = listFindings(project.id).filter(
       (finding) => finding.state === "open",
     ).length;
@@ -39,9 +50,11 @@ export function loader() {
   });
   return {
     projects,
-    health: getHealth(),
-    review: getReviewQueueSummary(),
-    recentDecisions: listRecentDecisions(8),
+    health: getHealth(db),
+    review: getReviewQueueSummary(db),
+    recentDecisions: listRecentDecisions(8, db).filter(
+      (event) => !event.fileId || readableIds.has(event.fileId),
+    ),
     topItems: openItems.slice(0, 6),
     projectHealth,
     openFindings: projectHealth.reduce((n, p) => n + p.openFindings, 0),
@@ -81,17 +94,59 @@ function reviewHref(item: {
   return `${base}&selected=${item.id}`;
 }
 
+function ProjectDirectory({
+  projects,
+  projectHealth,
+}: {
+  projects: ReturnType<typeof loader>["projects"];
+  projectHealth: ReturnType<typeof loader>["projectHealth"];
+}) {
+  const healthBySlug = new Map(projectHealth.map((project) => [project.slug, project]));
+  const projectSlugs = new Set(projects.map((project) => project.slug));
+  return (
+    <section className="project-grid" id="obras" aria-labelledby="project-title">
+      <div className="section-heading catalog-section-heading">
+        <div>
+          <p className="eyebrow">SELECCIONA UNA OBRA</p>
+          <h2 id="project-title">Explora documentos por proyecto</h2>
+        </div>
+        <span className="scenario-count">{scenarioRegistry.length} obras preparadas</span>
+      </div>
+      <p className="demo-marker">DEMO · Datos de ejemplo; las decisiones no son autorizaciones reales.</p>
+      <div className="scenario-cards-container">
+        {scenarioRegistry.filter((scenario) => projectSlugs.has(scenario.slug)).map((scenario) => {
+          const health = healthBySlug.get(scenario.slug);
+          return (
+            <Link className="project-card scenario-card" to={`/file/${scenario.slug}`} key={scenario.slug}>
+              <div className="card-top">
+                <span className="scenario-badge">OBRA</span>
+                <span className="scenario-pill">{health?.fileCount ?? scenario.files.length} documentos</span>
+              </div>
+              <strong>{scenario.name}</strong>
+              <p className="scenario-story">{scenario.story}</p>
+              <div className="scenario-health">
+                <span className="health-chip health-current">{health?.current ?? 0} vigentes</span>
+                {(health?.pending ?? 0) > 0 && <span className="health-chip health-pending">{health?.pending} por decidir</span>}
+                {(health?.openFindings ?? 0) > 0 && <span className="health-chip health-finding">{health?.openFindings} hallazgos</span>}
+              </div>
+              <div className="scenario-focus"><span className="focus-label">Foco:</span> {scenario.dominantIssue}</div>
+              <div className="scenario-action-row">
+                <span className="scenario-query">Buscar “{scenario.recommendedQuery}”</span>
+                <span className="arrow-icon">→</span>
+              </div>
+            </Link>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 export default function FileIndex({
   loaderData,
 }: {
   loaderData: ReturnType<typeof loader>;
 }) {
-  const projectBySlug = new Map(
-    loaderData.projects.map((project) => [project.slug, project]),
-  );
-  const healthBySlug = new Map(
-    loaderData.projectHealth.map((project) => [project.slug, project]),
-  );
   const { review } = loaderData;
 
   return (
@@ -140,6 +195,8 @@ export default function FileIndex({
         </div>
       </section>
 
+      <ProjectDirectory projects={loaderData.projects} projectHealth={loaderData.projectHealth} />
+
       {/* Live command center */}
       <section className="command-center" aria-label="Estado operativo">
         <div className="kpi-strip">
@@ -167,7 +224,7 @@ export default function FileIndex({
           <div className="kpi-card kpi-current">
             <span className="kpi-value">{loaderData.approvedCount}</span>
             <span className="kpi-label">Documentos vigentes</span>
-            <span className="kpi-sub">Cubren 3 obras</span>
+            <span className="kpi-sub">Cubren {loaderData.projects.length} obras</span>
           </div>
           <div className="kpi-card kpi-findings">
             <span className="kpi-value">{loaderData.openFindings}</span>
@@ -250,68 +307,6 @@ export default function FileIndex({
               <p className="muted">Aún no hay decisiones registradas.</p>
             )}
           </div>
-        </div>
-      </section>
-
-      {/* Projects grid */}
-      <section className="project-grid" id="obras" aria-labelledby="project-title">
-        <div className="section-heading catalog-section-heading">
-          <div>
-            <p className="eyebrow">ESCENARIOS DEL PILOTO</p>
-            <h2 id="project-title">Tres historias de validación documental</h2>
-          </div>
-          <span className="scenario-count">
-            {scenarioRegistry.length} escenarios preparados
-          </span>
-        </div>
-
-        <div className="scenario-cards-container">
-          {scenarioRegistry.map((scenario) => {
-            const project = projectBySlug.get(scenario.slug);
-            const health = healthBySlug.get(scenario.slug);
-            if (!project || !health) return null;
-            return (
-              <Link
-                className="project-card scenario-card"
-                to={`/file/${scenario.slug}`}
-                key={scenario.slug}
-              >
-                <div className="card-top">
-                  <span className="scenario-badge">OBRA</span>
-                  <span className="scenario-pill">
-                    {scenario.files.length} documentos
-                  </span>
-                </div>
-                <strong>{scenario.name}</strong>
-                <p className="scenario-story">{scenario.story}</p>
-                <div className="scenario-health">
-                  <span className="health-chip health-current">
-                    {health.current} vigentes
-                  </span>
-                  {health.pending > 0 && (
-                    <span className="health-chip health-pending">
-                      {health.pending} por decidir
-                    </span>
-                  )}
-                  {health.openFindings > 0 && (
-                    <span className="health-chip health-finding">
-                      {health.openFindings} hallazgos
-                    </span>
-                  )}
-                </div>
-                <div className="scenario-focus">
-                  <span className="focus-label">Foco:</span>{" "}
-                  {scenario.dominantIssue}
-                </div>
-                <div className="scenario-action-row">
-                  <span className="scenario-query">
-                    Buscar “{scenario.recommendedQuery}”
-                  </span>
-                  <span className="arrow-icon">→</span>
-                </div>
-              </Link>
-            );
-          })}
         </div>
       </section>
 

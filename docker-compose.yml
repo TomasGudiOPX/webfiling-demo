@@ -5,6 +5,7 @@ services:
       PORT: 3000
       DATABASE_PATH: /app/data/webfiling.sqlite
       SOURCE_ROOT: /app/source
+      MANAGED_STORAGE_ROOT: /app/managed-files
       DEMO_MODE: ${DEMO_MODE:-true}
       INDEX_INTERVAL_SECONDS: ${INDEX_INTERVAL_SECONDS:-300}
       SESSION_SECRET: ${SESSION_SECRET:-demo-only-secret}
@@ -12,6 +13,7 @@ services:
     volumes:
       - webfiling-data:/app/data
       - ${SOURCE_ROOT_HOST:-./fixtures}:/app/source:ro
+      - webfiling-managed-files:/app/managed-files
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
@@ -23,14 +25,17 @@ services:
     environment:
       DATABASE_PATH: /app/data/webfiling.sqlite
       SOURCE_ROOT: /app/source
+      MANAGED_STORAGE_ROOT: /app/managed-files
       DEMO_MODE: ${DEMO_MODE:-true}
       INDEX_INTERVAL_SECONDS: ${INDEX_INTERVAL_SECONDS:-300}
       SESSION_SECRET: ${SESSION_SECRET:-demo-only-secret}
     volumes:
       - webfiling-data:/app/data
       - ${SOURCE_ROOT_HOST:-./fixtures}:/app/source:ro
+      - webfiling-managed-files:/app/managed-files
     depends_on:
       web:
         condition: service_healthy
 volumes:
   webfiling-data:
+  webfiling-managed-files:

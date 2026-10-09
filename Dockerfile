@@ -11,6 +11,6 @@ FROM node:22-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app ./
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data /app/managed-files
 EXPOSE 3000
 CMD ["npm", "run", "start"]

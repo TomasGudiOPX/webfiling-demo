@@ -4,18 +4,29 @@ import { renderMarkdown } from "./markdown";
 import type { PreviewDescriptor } from "../types";
 
 type Props = { fileId: string; preview: PreviewDescriptor };
-const source = (fileId: string, preview: PreviewDescriptor) =>
-  preview.url ?? `/api/files/${fileId}/preview`;
+const source = (fileId: string) =>
+  `/api/files/${encodeURIComponent(fileId)}/preview`;
 
 function RemoteMarkdown({ url, fallback }: { url: string; fallback?: string }) {
-  const [content, setContent] = useState(fallback ?? "");
+  const [content, setContent] = useState("");
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    if (fallback) return;
-    fetch(url)
+    const controller = new AbortController();
+    let active = true;
+    setContent("");
+    setError(null);
+    fetch(url, { signal: controller.signal, cache: "no-store" })
       .then((response) => (response.ok ? response.text() : Promise.reject()))
-      .then(setContent)
-      .catch(() => setError("No se pudo cargar el Markdown protegido."));
+      .then((value) => {
+        if (active) setContent(value);
+      })
+      .catch(() => {
+        if (active) setError("No se pudo cargar el Markdown protegido.");
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, [url, fallback]);
   return (
     <div className="markdown-preview">
@@ -32,7 +43,10 @@ function DocxText({ url, fallback }: { url: string; fallback?: string }) {
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
-    fetch(url)
+    const controller = new AbortController();
+    setText("");
+    setError(null);
+    fetch(url, { signal: controller.signal, cache: "no-store" })
       .then((response) =>
         response.ok ? response.arrayBuffer() : Promise.reject(),
       )
@@ -42,11 +56,11 @@ function DocxText({ url, fallback }: { url: string; fallback?: string }) {
       })
       .catch(() => {
         if (!active) return;
-        if (fallback) setText(fallback);
-        else setError("No se pudo leer el DOCX protegido.");
+        setError("No se pudo leer el DOCX protegido.");
       });
     return () => {
       active = false;
+      controller.abort();
     };
   }, [url]);
   return (
@@ -102,7 +116,7 @@ function PreviewContent({
       <strong>{preview.title}</strong>
       <small>
         {preview.reason ??
-          "Este formato no tiene un visor seguro todavía; la evidencia sigue disponible."}
+          "Este formato no tiene vista previa; puede descargar el archivo."}
       </small>
     </div>
   );
@@ -110,7 +124,7 @@ function PreviewContent({
 
 export function DocumentPreview({ fileId, preview }: Props) {
   const [expanded, setExpanded] = useState(false);
-  const url = source(fileId, preview);
+  const url = source(fileId);
   const canExpand = preview.kind !== "unavailable";
 
   useEffect(() => {
@@ -131,7 +145,7 @@ export function DocumentPreview({ fileId, preview }: Props) {
           </button>
         </div>
       )}
-      <PreviewContent url={url} preview={preview} />
+      <PreviewContent key={url} url={url} preview={preview} />
       {expanded && (
         <div
           className="preview-backdrop"

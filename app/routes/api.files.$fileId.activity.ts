@@ -1,9 +1,3 @@
 import type { LoaderFunctionArgs } from "react-router";
-import { seedFixtures } from "../.server/db.server";
-import { listDecisionEvents } from "../.server/governance.server";
-export function loader({ params }: LoaderFunctionArgs) {
-  seedFixtures();
-  return Response.json({
-    events: listDecisionEvents({ fileId: params.fileId ?? "" }),
-  });
-}
+import { fileApi } from "../.server/library-api.server";
+export function loader({request,params}:LoaderFunctionArgs) { return fileApi(request,params.fileId ?? "",true); }

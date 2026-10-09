@@ -69,7 +69,7 @@ function buildPdf(title, subtitle, lines, stamp) {
   return file;
 }
 
-const outDir = path.resolve("public/fixtures");
+const outDir = path.resolve("private-fixtures");
 const fixtures = [
   ["costa-norte", "plano-rev-c.pdf", "PLANO GENERAL - REV C", "OBRA COSTA NORTE - ESTRUCTURA Y ARQUITECTURA", ["Escala 1:100", "Aprobado por jefatura de obra", "Fecha de emision: 05/10/2026"], "APROBADO PARA OBRA"],
   ["costa-norte", "plano-rev-b.pdf", "PLANO GENERAL - REV B", "OBRA COSTA NORTE - ESTRUCTURA Y ARQUITECTURA", ["Reemplazado por la revision C", "Fecha de emision: 14/08/2026"], "SUPERADO - NO CONSTRUIR"],
@@ -82,5 +82,5 @@ for (const [scenario, name, title, subtitle, lines, stamp] of fixtures) {
   const dir = path.join(outDir, scenario);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, name), buildPdf(title, subtitle, lines, stamp), "latin1");
-  console.log(`wrote public/fixtures/${scenario}/${name}`);
+  console.log(`wrote private-fixtures/${scenario}/${name}`);
 }

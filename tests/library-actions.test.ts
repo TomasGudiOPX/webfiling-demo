@@ -1,0 +1,35 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
+import test from "node:test";
+import type { ActionFunctionArgs } from "react-router";
+import { openDatabase, seedFixtures } from "../app/.server/db.server";
+import { saveManagedUpload } from "../app/.server/managed-upload.server";
+import { action } from "../app/.server/library-route.server";
+import { action as uploadAction } from "../app/routes/api.files.upload";
+import { retired } from "../app/.server/retired.server";
+import { editLibraryFile } from "../app/.server/library-management.server";
+
+test("mutation routes ignore forged actors, reject origins/multiple files, and retire old intents without changes",async()=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),"library-actions-"));
+  process.env.DATABASE_PATH=path.join(root,"test.sqlite");process.env.MANAGED_STORAGE_ROOT=path.join(root,"managed");process.env.DEMO_MODE="true";
+  const db=openDatabase();seedFixtures(db);
+  const upload=await saveManagedUpload("manager",{collectionId:"collection-project-project-costa-norte",file:new File(["private"],"manager.txt")},db);
+  const form=new FormData();form.set("intent","trash");form.set("fileId",upload.id);form.set("actorId","manager");
+  const args=(body:FormData,origin="http://test"):ActionFunctionArgs=>({request:new Request("http://test/file",{method:"POST",headers:{Origin:origin},body}),params:{},context:{}} as ActionFunctionArgs);
+  const before=db.prepare("SELECT count(*) n FROM file_events").get();
+  assert.equal((await action(args(form))).status,403);
+  assert.equal((await action(args(form,"http://attacker"))).status,403);
+  form.set("intent","approve");assert.equal((await action(args(form))).status,410);
+  for(const response of [retired(),retired()]) assert.equal(response.status,410);
+  assert.deepEqual(db.prepare("SELECT count(*) n FROM file_events").get(),before);
+  const multi=new FormData();multi.append("file",new File(["a"],"a.txt"));multi.append("file",new File(["b"],"b.txt"));multi.set("collectionId","collection-project-project-costa-norte");
+  assert.equal((await uploadAction(args(multi))).status,400);
+  multi.delete("file");multi.set("file",new File(["a"],"a.txt"));multi.set("collectionId","collection-administration");
+  assert.equal((await uploadAction(args(multi))).status,403);
+  editLibraryFile("manager","costa-plan-current",{categoryId:null,discipline:null,location:null},db);
+  seedFixtures(db);
+  assert.equal(db.prepare("SELECT category_id FROM files WHERE id='costa-plan-current'").get()?.category_id,null);
+  db.close();
+});

@@ -10,22 +10,37 @@ import type {
   Finding,
   FindingState,
   IndexHealth,
+  PublicFile,
   PreviewDescriptor,
   Project,
   RelationGraph,
   ReviewDecision,
   SearchResult,
 } from "../types";
+import type { SearchFilters } from "../search-filters";
+import { DOCUMENT_CATEGORIES } from "../types";
 
 type SqliteDatabase = DatabaseSync;
 let cached: SqliteDatabase | undefined;
+let cachedPath: string | undefined;
 const DEMO_SLUGS = scenarioRegistry.map((scenario) => scenario.slug);
 
 const schema = `
 CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL, source_root TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, demo_owned INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), stable_identity TEXT NOT NULL UNIQUE, filename TEXT NOT NULL, source_path TEXT NOT NULL, extension TEXT NOT NULL DEFAULT '', size_bytes INTEGER NOT NULL DEFAULT 0, modified_at TEXT NOT NULL, document_type TEXT NOT NULL DEFAULT 'other', status TEXT NOT NULL, index_state TEXT NOT NULL DEFAULT 'indexed', metadata_text TEXT NOT NULL DEFAULT '', reviewer TEXT, reviewed_at TEXT, review_reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, demo_owned INTEGER NOT NULL DEFAULT 0, preview_kind TEXT, preview_title TEXT, preview_url TEXT, preview_content TEXT, preview_sections TEXT);
+CREATE TABLE IF NOT EXISTS collections (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('project','shared','administration')), project_id TEXT UNIQUE REFERENCES projects(id), sample_owned INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id), stable_identity TEXT NOT NULL UNIQUE, filename TEXT NOT NULL, source_path TEXT NOT NULL, extension TEXT NOT NULL DEFAULT '', size_bytes INTEGER NOT NULL DEFAULT 0, modified_at TEXT NOT NULL, document_type TEXT NOT NULL DEFAULT 'other', status TEXT NOT NULL, index_state TEXT NOT NULL DEFAULT 'indexed', metadata_text TEXT NOT NULL DEFAULT '', reviewer TEXT, reviewed_at TEXT, review_reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, demo_owned INTEGER NOT NULL DEFAULT 0, preview_kind TEXT, preview_title TEXT, preview_url TEXT, preview_content TEXT, preview_sections TEXT, category_id TEXT, discipline_tag TEXT, location_tag TEXT);
 CREATE INDEX IF NOT EXISTS idx_files_project_status ON files(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_files_identity ON files(stable_identity);
+CREATE TABLE IF NOT EXISTS file_projects (file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, created_at TEXT NOT NULL, PRIMARY KEY(file_id, project_id));
+CREATE INDEX IF NOT EXISTS idx_file_projects_project ON file_projects(project_id, file_id);
+CREATE TABLE IF NOT EXISTS managed_folders (id TEXT PRIMARY KEY, collection_id TEXT NOT NULL REFERENCES collections(id), parent_id TEXT REFERENCES managed_folders(id) ON DELETE SET NULL, display_name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_folders_sibling_name ON managed_folders(collection_id, parent_id, display_name);
+CREATE TABLE IF NOT EXISTS library_file_metadata (file_id TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE, collection_id TEXT NOT NULL REFERENCES collections(id), origin TEXT NOT NULL CHECK(origin IN ('source','fixture','managed_upload','legacy_simulated')), content_key TEXT, managed_folder_id TEXT REFERENCES managed_folders(id) ON DELETE SET NULL, display_name TEXT NOT NULL, contributor_id TEXT, availability TEXT NOT NULL CHECK(availability IN ('available','unavailable','processing','error')), trashed_at TEXT, sample_owned INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_library_collection ON library_file_metadata(collection_id, trashed_at);
+CREATE TABLE IF NOT EXISTS demo_profiles (id TEXT PRIMARY KEY CHECK(id IN ('employee','manager','administration-staff','system-administrator')), display_name TEXT NOT NULL, is_system_administrator INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS collection_grants (profile_id TEXT NOT NULL REFERENCES demo_profiles(id) ON DELETE CASCADE, collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE, can_read INTEGER NOT NULL DEFAULT 0, can_contribute INTEGER NOT NULL DEFAULT 0, can_organize INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(profile_id, collection_id), CHECK(can_organize=0 OR can_contribute=1), CHECK(can_contribute=0 OR can_read=1));
+CREATE TABLE IF NOT EXISTS file_events (id TEXT PRIMARY KEY, file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE, event_type TEXT NOT NULL, actor_id TEXT NOT NULL, occurred_at TEXT NOT NULL, before_json TEXT, after_json TEXT);
+CREATE INDEX IF NOT EXISTS idx_file_events_file_time ON file_events(file_id, occurred_at, id);
 CREATE TABLE IF NOT EXISTS file_relations (id INTEGER PRIMARY KEY AUTOINCREMENT, from_file_id TEXT NOT NULL REFERENCES files(id), to_file_id TEXT NOT NULL REFERENCES files(id), relation TEXT NOT NULL, UNIQUE(from_file_id, to_file_id, relation));
 CREATE TABLE IF NOT EXISTS reviews (id INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT NOT NULL REFERENCES files(id), reviewer TEXT NOT NULL, decision TEXT NOT NULL, reason TEXT, reviewed_at TEXT NOT NULL, classification_snapshot TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS findings (id TEXT PRIMARY KEY, file_id TEXT NOT NULL REFERENCES files(id), type TEXT NOT NULL, reason TEXT NOT NULL, evidence TEXT NOT NULL, confidence REAL NOT NULL, state TEXT NOT NULL DEFAULT 'open', reviewed_at TEXT, review_note TEXT, demo_owned INTEGER NOT NULL DEFAULT 0);
@@ -56,18 +71,111 @@ function migrate(db: SqliteDatabase) {
       /* existing column */
     }
   }
+  const existingFileColumns = new Set(
+    (db.prepare("PRAGMA table_info(files)").all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  );
+  for (const column of ["category_id", "discipline_tag", "location_tag"] as const) {
+    if (!existingFileColumns.has(column))
+      db.exec(`ALTER TABLE files ADD COLUMN ${column} TEXT`);
+  }
+  const existingCollectionColumns = new Set(
+    (db.prepare("PRAGMA table_info(collections)").all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  );
+  for (const column of ["project_id", "sample_owned"] as const) {
+    if (!existingCollectionColumns.has(column)) {
+      const clause =
+        column === "project_id"
+          ? "TEXT REFERENCES projects(id)"
+          : "INTEGER NOT NULL DEFAULT 0";
+      db.exec(`ALTER TABLE collections ADD COLUMN ${column} ${clause}`);
+    }
+  }
+  db.exec(
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_project_id ON collections(project_id)",
+  );
+  const projectId = (
+    db.prepare("PRAGMA table_info(files)").all() as Array<{
+      name: string;
+      notnull: number;
+    }>
+  ).find((column) => column.name === "project_id");
+  if (projectId?.notnull) {
+    db.exec("PRAGMA foreign_keys=OFF");
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      db.exec(`CREATE TABLE files_library_new (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id),
+        stable_identity TEXT NOT NULL UNIQUE,
+        filename TEXT NOT NULL,
+        source_path TEXT NOT NULL,
+        extension TEXT NOT NULL DEFAULT '',
+        size_bytes INTEGER NOT NULL DEFAULT 0,
+        modified_at TEXT NOT NULL,
+        document_type TEXT NOT NULL DEFAULT 'other',
+        status TEXT NOT NULL,
+        index_state TEXT NOT NULL DEFAULT 'indexed',
+        metadata_text TEXT NOT NULL DEFAULT '',
+        reviewer TEXT,
+        reviewed_at TEXT,
+        review_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        demo_owned INTEGER NOT NULL DEFAULT 0,
+        preview_kind TEXT,
+        preview_title TEXT,
+        preview_url TEXT,
+        preview_content TEXT,
+        preview_sections TEXT,
+        category_id TEXT,
+        discipline_tag TEXT,
+        location_tag TEXT
+      )`);
+      db.exec(`INSERT INTO files_library_new (
+        id,project_id,stable_identity,filename,source_path,extension,size_bytes,
+        modified_at,document_type,status,index_state,metadata_text,reviewer,
+        reviewed_at,review_reason,created_at,updated_at,demo_owned,preview_kind,
+        preview_title,preview_url,preview_content,preview_sections,category_id,
+        discipline_tag,location_tag
+      ) SELECT
+        id,project_id,stable_identity,filename,source_path,extension,size_bytes,
+        modified_at,document_type,status,index_state,metadata_text,reviewer,
+        reviewed_at,review_reason,created_at,updated_at,demo_owned,preview_kind,
+        preview_title,preview_url,preview_content,preview_sections,category_id,
+        discipline_tag,location_tag
+      FROM files`);
+      db.exec("DROP TABLE files; ALTER TABLE files_library_new RENAME TO files");
+      db.exec("CREATE INDEX idx_files_project_status ON files(project_id,status)");
+      db.exec("CREATE INDEX idx_files_identity ON files(stable_identity)");
+      if (db.prepare("PRAGMA foreign_key_check").all().length)
+        throw new Error("File-library migration produced foreign-key violations");
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    } finally {
+      db.exec("PRAGMA foreign_keys=ON");
+    }
+    const violations = db.prepare("PRAGMA foreign_key_check").all();
+    if (violations.length)
+      throw new Error("File-library migration produced foreign-key violations");
+  }
 }
 
 export function openDatabase(
   databasePath = getConfig().databasePath,
 ): SqliteDatabase {
-  if (cached && databasePath === getConfig().databasePath) return cached;
+  if (cached && cachedPath === databasePath && cached.isOpen) return cached;
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const db = new DatabaseSync(databasePath);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
   db.exec(schema);
   migrate(db);
-  if (databasePath === getConfig().databasePath) cached = db;
+  if (databasePath === getConfig().databasePath) { cached = db; cachedPath = databasePath; }
   return db;
 }
 
@@ -92,7 +200,96 @@ function previewValues(preview: PreviewDescriptor) {
   };
 }
 
+function initializeLibraryModel(db: SqliteDatabase): void {
+  const timestamp = now();
+  const insertCollection = db.prepare(`
+    INSERT INTO collections (id,name,kind,project_id,sample_owned,created_at,updated_at)
+    VALUES (@id,@name,@kind,@projectId,@sampleOwned,@createdAt,@updatedAt)
+    ON CONFLICT(id) DO UPDATE SET project_id=COALESCE(collections.project_id,excluded.project_id)
+  `);
+  const projects = db.prepare("SELECT id,slug,name,demo_owned FROM projects ORDER BY slug").all() as Array<{
+    id: string; slug: string; name: string; demo_owned: number;
+  }>;
+  for (const project of projects) {
+    insertCollection.run({
+      id: `collection-project-${project.id}`,
+      name: project.name,
+      kind: "project",
+      projectId: project.id,
+      sampleOwned: project.demo_owned,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+  }
+  for (const collection of [
+    { id: "collection-shared-resources", name: "Recursos compartidos", kind: "shared" },
+    { id: "collection-administration", name: "Administración", kind: "administration" },
+  ] as const) {
+    insertCollection.run({
+      ...collection,
+      projectId: null,
+      sampleOwned: 1,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+  }
+
+  db.exec(`
+    INSERT OR IGNORE INTO demo_profiles (id,display_name,is_system_administrator) VALUES
+      ('employee','Empleado',0),
+      ('manager','Gerencia',0),
+      ('administration-staff','Administración',0),
+      ('system-administrator','Administrador del sistema',1)
+  `);
+  const grants = db.prepare(`
+    INSERT OR IGNORE INTO collection_grants
+      (profile_id,collection_id,can_read,can_contribute,can_organize)
+    VALUES (?,?,?,?,?)
+  `);
+  const collectionRows = db.prepare("SELECT id,kind,project_id FROM collections").all() as Array<{
+    id: string; kind: "project" | "shared" | "administration"; project_id: string | null;
+  }>;
+  const projectSlugById = new Map(projects.map((project) => [project.id, project.slug]));
+  for (const collection of collectionRows) {
+    const slug = collection.project_id ? projectSlugById.get(collection.project_id) : undefined;
+    const preset: Record<string, readonly [number, number, number]> = {
+      employee:
+        collection.kind === "shared" || slug === "costa-norte" ? [1, slug === "costa-norte" ? 1 : 0, 0] : [0, 0, 0],
+      manager:
+        collection.kind === "shared" ? [1, 0, 0] : slug === "costa-norte" || slug === "parque-industrial" ? [1, 1, 1] : slug === "torre-del-parque" || slug === "torre-horizonte" ? [1, 0, 0] : [0, 0, 0],
+      "administration-staff":
+        collection.kind === "shared" ? [1, 1, 0] : collection.kind === "administration" ? [1, 1, 1] : [0, 0, 0],
+      "system-administrator": [1, 1, 1],
+    };
+    for (const profileId of Object.keys(preset))
+      grants.run(profileId, collection.id, ...preset[profileId]);
+  }
+
+  db.prepare(`
+    INSERT OR IGNORE INTO file_projects (file_id,project_id,created_at)
+    SELECT id,project_id,created_at FROM files WHERE project_id IS NOT NULL
+  `).run();
+  db.prepare(`
+    INSERT OR IGNORE INTO library_file_metadata
+      (file_id,collection_id,origin,content_key,managed_folder_id,display_name,
+       contributor_id,availability,trashed_at,sample_owned,created_at,updated_at)
+    SELECT f.id,c.id,
+      CASE WHEN f.source_path LIKE 'simulated://%' THEN 'legacy_simulated'
+           WHEN f.demo_owned=1 THEN 'fixture' ELSE 'source' END,
+      NULL,NULL,f.filename,NULL,
+      CASE WHEN f.source_path LIKE 'simulated://%' OR f.preview_kind='unavailable'
+           THEN 'unavailable' ELSE 'available' END,
+      NULL,
+      CASE WHEN f.demo_owned=1 AND f.source_path NOT LIKE 'simulated://%' THEN 1 ELSE 0 END,
+      f.created_at,f.updated_at
+    FROM files f
+    JOIN projects p ON p.id=f.project_id
+    JOIN collections c ON c.project_id=p.id
+  `).run();
+}
+
 export function resetDemoFixtures(db = openDatabase()): void {
+  initializeLibraryModel(db);
   const placeholders = DEMO_SLUGS.map(() => "?").join(",");
   const projectRows = db
     .prepare(
@@ -104,7 +301,12 @@ export function resetDemoFixtures(db = openDatabase()): void {
     ? (
         db
           .prepare(
-            `SELECT id FROM files WHERE demo_owned=1 OR project_id IN (${projectIds.map(() => "?").join(",")})`,
+            `SELECT f.id
+             FROM files f
+             LEFT JOIN library_file_metadata m ON m.file_id=f.id
+             WHERE f.demo_owned=1
+               AND f.project_id IN (${projectIds.map(() => "?").join(",")})
+               AND (m.sample_owned=1 OR f.source_path LIKE 'simulated://%')`,
           )
           .all(...projectIds) as Array<{ id: string }>
       ).map((row) => row.id)
@@ -115,20 +317,25 @@ export function resetDemoFixtures(db = openDatabase()): void {
       const marks = fileIds.map(() => "?").join(",");
       const reviewRows = db
         .prepare(
-          `SELECT id FROM review_items WHERE file_id IN (${marks}) OR demo_owned=1`,
+          `SELECT id FROM review_items WHERE demo_owned=1 AND (file_id IN (${marks}) OR project_id IN (${projectIds.map(() => "?").join(",")}))`,
         )
-        .all(...fileIds) as Array<{ id: string }>;
+        .all(...fileIds, ...projectIds) as Array<{ id: string }>;
       const reviewIds = reviewRows.map((row) => row.id);
+      const eventReviewClause = reviewIds.length
+        ? ` OR review_item_id IN (${reviewIds.map(() => "?").join(",")})`
+        : "";
+      db.prepare(
+        `DELETE FROM decision_events WHERE demo_owned=1 AND (file_id IN (${marks})${eventReviewClause})`,
+      ).run(...fileIds, ...reviewIds);
       if (reviewIds.length)
         db.prepare(
-          `DELETE FROM decision_events WHERE review_item_id IN (${reviewIds.map(() => "?").join(",")}) OR demo_owned=1`,
+          `DELETE FROM decision_events WHERE review_item_id IN (${reviewIds.map(() => "?").join(",")})`,
         ).run(...reviewIds);
-      else db.prepare("DELETE FROM decision_events WHERE demo_owned=1").run();
       db.prepare(
-        `DELETE FROM review_items WHERE file_id IN (${marks}) OR demo_owned=1`,
-      ).run(...fileIds);
+        `DELETE FROM review_items WHERE demo_owned=1 AND (file_id IN (${marks}) OR project_id IN (${projectIds.map(() => "?").join(",")}))`,
+      ).run(...fileIds, ...projectIds);
       db.prepare(
-        `DELETE FROM findings WHERE file_id IN (${marks}) OR demo_owned=1`,
+        `DELETE FROM findings WHERE demo_owned=1 AND file_id IN (${marks})`,
       ).run(...fileIds);
       db.prepare(`DELETE FROM reviews WHERE file_id IN (${marks})`).run(
         ...fileIds,
@@ -142,10 +349,23 @@ export function resetDemoFixtures(db = openDatabase()): void {
       db.prepare("DELETE FROM review_items WHERE demo_owned=1").run();
       db.prepare("DELETE FROM findings WHERE demo_owned=1").run();
     }
-    if (projectIds.length)
+    if (projectIds.length) {
       db.prepare(
-        `DELETE FROM projects WHERE id IN (${projectIds.map(() => "?").join(",")})`,
+        `DELETE FROM collections
+         WHERE project_id IN (${projectIds.map(() => "?").join(",")})
+           AND NOT EXISTS (
+             SELECT 1 FROM library_file_metadata
+             WHERE library_file_metadata.collection_id=collections.id
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM managed_folders
+             WHERE managed_folders.collection_id=collections.id
+           )`,
       ).run(...projectIds);
+      db.prepare(
+        `DELETE FROM projects WHERE id IN (${projectIds.map(() => "?").join(",")}) AND NOT EXISTS (SELECT 1 FROM files WHERE files.project_id=projects.id) AND NOT EXISTS (SELECT 1 FROM review_items WHERE review_items.project_id=projects.id) AND NOT EXISTS (SELECT 1 FROM collections WHERE collections.project_id=projects.id) AND NOT EXISTS (SELECT 1 FROM file_projects WHERE file_projects.project_id=projects.id)`,
+      ).run(...projectIds);
+    }
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -153,10 +373,10 @@ export function resetDemoFixtures(db = openDatabase()): void {
   }
   const timestamp = "2026-10-07T12:00:00.000Z";
   const insertProject = db.prepare(
-    "INSERT INTO projects (id,slug,name,source_root,created_at,updated_at,demo_owned) VALUES (@id,@slug,@name,@sourceRoot,@createdAt,@updatedAt,1)",
+    "INSERT INTO projects (id,slug,name,source_root,created_at,updated_at,demo_owned) VALUES (@id,@slug,@name,@sourceRoot,@createdAt,@updatedAt,1) ON CONFLICT(id) DO UPDATE SET slug=excluded.slug,name=excluded.name,source_root=excluded.source_root,updated_at=excluded.updated_at,demo_owned=1",
   );
   const insertFile = db.prepare(
-    "INSERT INTO files (id,project_id,stable_identity,filename,source_path,extension,size_bytes,modified_at,document_type,status,index_state,metadata_text,created_at,updated_at,demo_owned,preview_kind,preview_title,preview_url,preview_content,preview_sections) VALUES (@id,@projectId,@stableIdentity,@filename,@sourcePath,@extension,@sizeBytes,@modifiedAt,@documentType,@status,'indexed',@metadataText,@createdAt,@updatedAt,1,@previewKind,@previewTitle,@previewUrl,@previewContent,@previewSections)",
+    "INSERT INTO files (id,project_id,stable_identity,filename,source_path,extension,size_bytes,modified_at,document_type,status,index_state,metadata_text,created_at,updated_at,demo_owned,preview_kind,preview_title,preview_url,preview_content,preview_sections,category_id,discipline_tag,location_tag) VALUES (@id,@projectId,@stableIdentity,@filename,@sourcePath,@extension,@sizeBytes,@modifiedAt,@documentType,@status,'indexed',@metadataText,@createdAt,@updatedAt,1,@previewKind,@previewTitle,@previewUrl,@previewContent,@previewSections,@categoryId,@disciplineTag,@locationTag)",
   );
   const insertRelation = db.prepare(
     "INSERT INTO file_relations (from_file_id,to_file_id,relation) VALUES (?,?,?)",
@@ -182,13 +402,15 @@ export function resetDemoFixtures(db = openDatabase()): void {
       updatedAt: timestamp,
     });
     for (const file of scenario.files) {
-      const { preview, ...fileValues } = file;
+      const { preview, tags, ...fileValues } = file;
       insertFile.run({
         ...fileValues,
         projectId: project.id,
         stableIdentity: `demo:${scenario.slug}:${file.id}`,
         createdAt: timestamp,
         updatedAt: timestamp,
+        disciplineTag: tags.discipline,
+        locationTag: tags.location,
         ...previewValues(preview),
       });
       insertBaseline.run(
@@ -428,6 +650,7 @@ export function resetDemoFixtures(db = openDatabase()): void {
     0,
     "success",
   );
+  initializeLibraryModel(db);
 }
 
 export function seedFixtures(db = openDatabase()): void {
@@ -475,11 +698,23 @@ export function seedFixtures(db = openDatabase()): void {
     !docxPreviewContract.content?.includes("canaleta técnica")
   )
     resetDemoFixtures(db);
+  initializeLibraryModel(db);
+  const backfillOrganization = db.prepare(
+    "UPDATE files SET category_id=COALESCE(category_id,@categoryId),discipline_tag=COALESCE(discipline_tag,@disciplineTag),location_tag=COALESCE(location_tag,@locationTag) WHERE id=@id AND demo_owned=1 AND NOT EXISTS (SELECT 1 FROM file_events e WHERE e.file_id=files.id AND e.event_type='metadata_changed') AND (category_id IS NULL OR discipline_tag IS NULL OR location_tag IS NULL)",
+  );
+  for (const scenario of scenarioRegistry)
+    for (const file of scenario.files)
+      backfillOrganization.run({
+        id: file.id,
+        categoryId: file.categoryId,
+        disciplineTag: file.tags.discipline,
+        locationTag: file.tags.location,
+      });
 }
 export function rebuildSearchIndex(db = openDatabase()): void {
   db.exec("DELETE FROM files_fts");
   db.prepare(
-    "INSERT INTO files_fts (file_id,filename,source_path,project_name,document_type,metadata_text) SELECT files.id,files.filename,files.source_path,projects.name,files.document_type,files.metadata_text FROM files JOIN projects ON projects.id=files.project_id",
+    "INSERT INTO files_fts (file_id,filename,source_path,project_name,document_type,metadata_text) SELECT files.id,COALESCE(m.display_name,files.filename),files.source_path,COALESCE(projects.name,''),files.document_type,files.metadata_text FROM files LEFT JOIN projects ON projects.id=files.project_id LEFT JOIN library_file_metadata m ON m.file_id=files.id",
   ).run();
 }
 function parsePreview(row: any): PreviewDescriptor | null {
@@ -528,6 +763,11 @@ function mapFile(row: any): DocumentFile {
     sizeBytes: row.size_bytes,
     modifiedAt: row.modified_at,
     documentType: row.document_type,
+    categoryId: row.category_id ?? null,
+    tags: {
+      discipline: row.discipline_tag ?? null,
+      location: row.location_tag ?? null,
+    },
     status: row.status,
     indexState: row.index_state,
     metadataText: row.metadata_text,
@@ -559,6 +799,56 @@ export function getProject(
       )
       .get(slugOrId, slugOrId) as Project | undefined) ?? null
   );
+}
+
+export function getPublicFile(
+  fileId: string,
+  db = openDatabase(),
+): PublicFile | null {
+  const row = db.prepare(`${fileQuery} WHERE files.id=?`).get(fileId);
+  if (!row) return null;
+  const file = mapFile(row);
+  const library = db.prepare(
+    "SELECT collection_id,origin,display_name,availability FROM library_file_metadata WHERE file_id=?",
+  ).get(fileId) as {
+    collection_id: string;
+    origin: PublicFile["origin"];
+    display_name: string;
+    availability: PublicFile["availability"];
+  } | undefined;
+  if (!library) return null;
+  const projects = db.prepare(
+    "SELECT file_id AS fileId,project_id AS projectId,created_at AS createdAt FROM file_projects WHERE file_id=? ORDER BY project_id",
+  ).all(fileId) as unknown as PublicFile["projects"];
+  const versions = db.prepare(
+    "SELECT from_file_id,to_file_id FROM file_relations WHERE relation='supersedes' AND (from_file_id=? OR to_file_id=?)",
+  ).all(fileId, fileId) as Array<{ from_file_id: string; to_file_id: string }>;
+  return {
+    id: file.id,
+    primaryProjectId: file.projectId,
+    projects,
+    filename: file.filename,
+    displayName: library.display_name,
+    extension: file.extension,
+    sizeBytes: file.sizeBytes,
+    modifiedAt: file.modifiedAt,
+    documentType: file.documentType,
+    organization: {
+      categoryId: file.categoryId,
+      tags: file.tags,
+    },
+    origin: library.origin,
+    availability: library.availability,
+    versions: {
+      supersedes: versions
+        .filter((version) => version.from_file_id === fileId)
+        .map((version) => version.to_file_id),
+      supersededBy: versions
+        .filter((version) => version.to_file_id === fileId)
+        .map((version) => version.from_file_id),
+    },
+    preview: file.preview,
+  };
 }
 export function listProjectFiles(
   projectId: string,
@@ -602,28 +892,55 @@ export function getHealth(db = openDatabase()): IndexHealth {
       };
 }
 
-export function searchFiles(
-  query: string,
+function searchWhere(
+  filters: SearchFilters,
   projectId?: string,
-  status?: string,
-  db = openDatabase(),
-): SearchResult[] {
-  const trimmed = query.trim();
+  allowedFileIds?: readonly string[],
+) {
   const conditions = ["1=1"];
   const condParams: Array<string> = [];
   if (projectId) {
     conditions.push("files.project_id=?");
     condParams.push(projectId);
   }
-  if (status) {
+  if (allowedFileIds) {
+    if (!allowedFileIds.length) conditions.push("0=1");
+    else {
+      conditions.push(`files.id IN (${allowedFileIds.map(() => "?").join(",")})`);
+      condParams.push(...allowedFileIds);
+    }
+  }
+  if (filters.status) {
     conditions.push("files.status=?");
-    condParams.push(status);
+    condParams.push(filters.status);
+  }
+  if (filters.type) {
+    conditions.push("files.document_type=?");
+    condParams.push(filters.type);
+  }
+  if (filters.category === "unclassified") conditions.push("files.category_id IS NULL");
+  else if (filters.category) {
+    conditions.push("files.category_id=?");
+    condParams.push(filters.category);
+  }
+  if (filters.discipline) {
+    conditions.push("files.discipline_tag=?");
+    condParams.push(filters.discipline);
+  }
+  if (filters.location) {
+    conditions.push("files.location_tag=?");
+    condParams.push(filters.location);
+  }
+  if (filters.timeframe) {
+    const days = filters.timeframe === "year" ? 365 : Number.parseInt(filters.timeframe, 10);
+    conditions.push("files.modified_at>=?");
+    condParams.push(new Date(Date.now() - days * 86_400_000).toISOString());
   }
 
-  let matchSql = "1=1";
   const searchParams: Array<string> = [];
-  if (trimmed) {
-    const words = trimmed.split(/\s+/).filter(Boolean);
+  let matchSql = "1=1";
+  if (filters.query) {
+    const words = filters.query.split(/\s+/).filter(Boolean);
     const wordClauses = words.map(() => {
       return `(${["filename", "source_path", "metadata_text", "document_type"].map((field) => `${field} LIKE ?`).join(" OR ")})`;
     });
@@ -632,12 +949,29 @@ export function searchFiles(
       searchParams.push(...Array(4).fill(`%${word}%`));
     }
   }
+  return {
+    where: `${matchSql} AND ${conditions.join(" AND ")}`,
+    params: [...searchParams, ...condParams],
+  };
+}
 
-  const querySql = `SELECT files.*,(SELECT relation FROM file_relations r WHERE r.from_file_id=files.id OR r.to_file_id=files.id LIMIT 1) AS relation,projects.name AS project_name,projects.slug AS project_slug,0 AS rank FROM files JOIN projects ON projects.id=files.project_id WHERE ${matchSql} AND ${conditions.join(" AND ")} ORDER BY CASE files.status WHEN 'approved' THEN 0 WHEN 'pending_review' THEN 1 WHEN 'pending_ingestion' THEN 2 ELSE 3 END, modified_at DESC LIMIT 50`;
+export function searchFiles(
+  filters: SearchFilters,
+  projectId?: string,
+  db = openDatabase(),
+  allowedFileIds?: readonly string[],
+): SearchResult[] {
+  const { where, params } = searchWhere(filters, projectId, allowedFileIds);
+  const orderBy = filters.sort === "name"
+    ? "files.filename COLLATE NOCASE ASC"
+    : filters.sort === "oldest"
+      ? "files.modified_at ASC"
+      : "files.modified_at DESC";
+  const querySql = `SELECT files.*,(SELECT relation FROM file_relations r WHERE r.from_file_id=files.id OR r.to_file_id=files.id LIMIT 1) AS relation,projects.name AS project_name,projects.slug AS project_slug,0 AS rank FROM files JOIN projects ON projects.id=files.project_id WHERE ${where} ORDER BY ${orderBy} LIMIT 50`;
 
   const rows = db
     .prepare(querySql)
-    .all(...searchParams, ...condParams) as any[];
+    .all(...params) as any[];
   return rows.map((row) => ({
     ...mapFile(row),
     projectName: row.project_name,
@@ -650,6 +984,46 @@ export function searchFiles(
       row.relation ? `Relación: ${row.relation}` : "Sin relación registrada",
     ],
   }));
+}
+
+export interface SearchFileCounts {
+  matchingFiles: number;
+  categoryCounts: Record<string, number>;
+  truncated: boolean;
+}
+
+export function searchFileCounts(
+  filters: SearchFilters,
+  projectId?: string,
+  db = openDatabase(),
+  allowedFileIds?: readonly string[],
+): SearchFileCounts {
+  const matching = searchWhere(filters, projectId, allowedFileIds);
+  const matchingFiles = Number(
+    (db.prepare(
+      `SELECT COUNT(*) AS count FROM files JOIN projects ON projects.id=files.project_id WHERE ${matching.where}`,
+    ).get(...matching.params) as { count: number }).count,
+  );
+  const byCategory = searchWhere(
+    { ...filters, category: "" },
+    projectId,
+    allowedFileIds,
+  );
+  const rows = db
+    .prepare(
+      `SELECT COALESCE(files.category_id,'unclassified') AS category,COUNT(*) AS count FROM files JOIN projects ON projects.id=files.project_id WHERE ${byCategory.where} GROUP BY COALESCE(files.category_id,'unclassified')`,
+    )
+    .all(...byCategory.params) as Array<{ category: string; count: number }>;
+  const categoryCounts: Record<string, number> = Object.fromEntries([
+    ["unclassified", 0],
+    ...DOCUMENT_CATEGORIES.map(({ id }) => [id, 0]),
+  ]);
+  for (const row of rows) categoryCounts[row.category] = Number(row.count);
+  return {
+    matchingFiles,
+    categoryCounts,
+    truncated: matchingFiles > 50,
+  };
 }
 export function getRelationGraph(
   projectId: string,

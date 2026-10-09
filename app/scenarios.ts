@@ -1,19 +1,30 @@
 import type { ScenarioDefinition } from "./types";
+import type {
+  DocumentCategoryId,
+  DisciplineTagId,
+  LocationTagId,
+} from "./types";
 
 const base = (slug: string, filename: string) =>
   `/app/source/${slug}/${filename}`;
+const organization = (
+  categoryId: DocumentCategoryId | null,
+  discipline: DisciplineTagId | null = null,
+  location: LocationTagId | null = null,
+) => ({ categoryId, tags: { discipline, location } });
 export const scenarioRegistry: readonly ScenarioDefinition[] = [
   {
     slug: "costa-norte",
     name: "Obra Costa Norte",
     story:
-      "La pregunta es cuál es el plano vigente y qué aprobación humana lo respalda.",
-    dominantIssue: "Versiones y aprobación humana",
-    recommendedQuery: "plano vigente",
+      "Encuentre planos, consulte sus versiones registradas y organice los archivos de la colección.",
+    dominantIssue: "Archivos y versiones vinculadas",
+    recommendedQuery: "plano",
     sourceRoot: "/app/source/costa-norte",
     files: [
       {
         id: "costa-plan-current",
+        ...organization("technical", "structures", "north-sector"),
         filename: "Plano general - Rev C.pdf",
         sourcePath: base("costa-norte", "planos/Plano general - Rev C.pdf"),
         extension: ".pdf",
@@ -31,6 +42,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "costa-plan-old",
+        ...organization("technical", "structures", "north-sector"),
         filename: "Plano general - Rev B.pdf",
         sourcePath: base("costa-norte", "planos/Plano general - Rev B.pdf"),
         extension: ".pdf",
@@ -47,6 +59,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "costa-notice",
+        ...organization("progress-quality", "project-management", "site-access"),
         filename: "Aviso de obra 18.docx",
         sourcePath: base("costa-norte", "comunicaciones/Aviso de obra 18.docx"),
         extension: ".docx",
@@ -67,6 +80,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "costa-photo",
+        ...organization(null),
         filename: "IMG_0042.jpg",
         sourcePath: base("costa-norte", "recibidos/IMG_0042.jpg"),
         extension: ".jpg",
@@ -100,6 +114,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
     files: [
       {
         id: "parque-memoria",
+        ...organization("technical", "structures", "tower-a"),
         filename: "Memoria técnica nave A.md",
         sourcePath: base(
           "parque-industrial",
@@ -120,6 +135,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "parque-duplicate-a",
+        ...organization("technical", "architecture", "tower-a"),
         filename: "Plano instalaciones Rev A.pdf",
         sourcePath: base(
           "parque-industrial",
@@ -139,6 +155,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "parque-duplicate-b",
+        ...organization("technical", "architecture", "tower-a"),
         filename: "Plano instalaciones Rev A (copia).pdf",
         sourcePath: base(
           "parque-industrial",
@@ -158,6 +175,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "parque-contract",
+        ...organization("contracts", "structures", "whole-site"),
         filename: "Contrato proveedor.md",
         sourcePath: base(
           "parque-industrial",
@@ -223,13 +241,14 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
     slug: "torre-del-parque",
     name: "Torre del Parque",
     story:
-      "Una entrada nueva llega sin tocar la fuente y puede avanzar de ingestión pendiente a revisión.",
-    dominantIssue: "Formatos y nueva ingesta simulada",
+      "Consulte planos, bitácoras y especificaciones en sus formatos originales, sin modificar la fuente.",
+    dominantIssue: "Formatos y consulta de archivos",
     recommendedQuery: "fachada",
     sourceRoot: "/app/source/torre-del-parque",
     files: [
       {
         id: "torre-fachada",
+        ...organization("technical", "architecture", "facade"),
         filename: "Fachada principal.pdf",
         sourcePath: base("torre-del-parque", "planos/Fachada principal.pdf"),
         extension: ".pdf",
@@ -246,6 +265,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "torre-bitacora",
+        ...organization("progress-quality", "quality", "facade"),
         filename: "Bitácora de coordinación.md",
         sourcePath: base(
           "torre-del-parque",
@@ -266,6 +286,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "torre-especificacion",
+        ...organization("logistics", "procurement", "facade"),
         filename: "Especificación de materiales.docx",
         sourcePath: base(
           "torre-del-parque",
@@ -303,6 +324,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
     files: [
       {
         id: "th-ficha",
+        ...organization("contracts", "project-management", "whole-site"),
         filename: "ficha_tecnica_proyecto.md",
         sourcePath: base(
           "torre-horizonte",
@@ -324,6 +346,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "th-resumen",
+        ...organization("contracts", "project-management", "whole-site"),
         filename: "resumen_contractual_y_alcance.md",
         sourcePath: base(
           "torre-horizonte",
@@ -344,6 +367,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "th-presupuesto",
+        ...organization("finance", "finance", "whole-site"),
         filename: "presupuesto_desglosado_y_apu.md",
         sourcePath: base(
           "torre-horizonte",
@@ -364,6 +388,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "th-flujo",
+        ...organization("finance", "finance", "whole-site"),
         filename: "flujo_fondos_y_curva_inversion.md",
         sourcePath: base(
           "torre-horizonte",
@@ -384,6 +409,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "th-matriz",
+        ...organization("technical", "structures", "tower-a"),
         filename: "matriz_planos_apc.md",
         sourcePath: base(
           "torre-horizonte",
@@ -404,6 +430,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "th-rfis",
+        ...organization("technical", "structures", "tower-a"),
         filename: "registro_rfis.md",
         sourcePath: base(
           "torre-horizonte",
@@ -424,6 +451,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "th-curva",
+        ...organization("progress-quality", "structures", "level-07"),
         filename: "curva_s_y_certificaciones.md",
         sourcePath: base(
           "torre-horizonte",
@@ -444,6 +472,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "th-bitacora",
+        ...organization("progress-quality", "project-management", "whole-site"),
         filename: "libro_diario_obra_bitacora.md",
         sourcePath: base(
           "torre-horizonte",
@@ -464,6 +493,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "th-acopios",
+        ...organization("logistics", "logistics", "north-sector"),
         filename: "acopios_y_control_materiales.md",
         sourcePath: base(
           "torre-horizonte",
@@ -484,6 +514,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "th-maquinaria",
+        ...organization("logistics", "logistics", "north-sector"),
         filename: "maquinaria_y_equipos_asignados.md",
         sourcePath: base(
           "torre-horizonte",
@@ -504,6 +535,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "th-dotacion",
+        ...organization("people-safety", "safety", "whole-site"),
         filename: "dotacion_y_partes_asistencia.md",
         sourcePath: base(
           "torre-horizonte",
@@ -524,6 +556,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "th-planseguridad",
+        ...organization("people-safety", "safety", "level-07"),
         filename: "plan_seguridad_ats.md",
         sourcePath: base(
           "torre-horizonte",
@@ -544,6 +577,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "th-actas",
+        ...organization("subcontractors", "procurement", "tower-a"),
         filename: "actas_medicion_y_certificados.md",
         sourcePath: base(
           "torre-horizonte",
@@ -564,6 +598,7 @@ export const scenarioRegistry: readonly ScenarioDefinition[] = [
       },
       {
         id: "th-asignacion",
+        ...organization("subcontractors", "procurement", "tower-a"),
         filename: "asignacion_gremios_tercerizados.md",
         sourcePath: base(
           "torre-horizonte",

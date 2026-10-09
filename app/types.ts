@@ -6,6 +6,152 @@ export type FileStatus =
   | "returned"
   | "missing_metadata";
 
+export const DOCUMENT_CATEGORIES = [
+  { id: "contracts", label: "Ficha y contratos" },
+  { id: "finance", label: "Presupuesto y finanzas" },
+  { id: "technical", label: "Documentación técnica" },
+  { id: "progress-quality", label: "Avance y calidad" },
+  { id: "logistics", label: "Logística y materiales" },
+  { id: "people-safety", label: "Personal y seguridad" },
+  { id: "subcontractors", label: "Subcontratistas" },
+] as const;
+
+export type DocumentCategoryId = (typeof DOCUMENT_CATEGORIES)[number]["id"];
+export const DISCIPLINE_TAGS = {
+  architecture: "Arquitectura",
+  structures: "Estructuras",
+  finance: "Finanzas",
+  quality: "Calidad",
+  logistics: "Logística",
+  safety: "Seguridad e higiene",
+  procurement: "Compras y contratos",
+  "project-management": "Gestión de obra",
+} as const;
+export type DisciplineTagId = keyof typeof DISCIPLINE_TAGS;
+export const LOCATION_TAGS = {
+  "whole-site": "Obra completa",
+  "north-sector": "Sector norte",
+  "tower-a": "Torre A",
+  facade: "Fachada",
+  "level-07": "Nivel 7",
+  "site-access": "Acceso a obra",
+} as const;
+export type LocationTagId = keyof typeof LOCATION_TAGS;
+
+export interface DocumentOrganization {
+  categoryId: DocumentCategoryId | null;
+  tags: {
+    discipline: DisciplineTagId | null;
+    location: LocationTagId | null;
+  };
+}
+
+export type FileOrigin = "source" | "fixture" | "managed_upload" | "legacy_simulated";
+export type FileAvailability = "available" | "unavailable" | "processing" | "error";
+export type DemoProfileId = "employee" | "manager" | "administration-staff" | "system-administrator";
+export type CollectionKind = "project" | "shared" | "administration";
+export type FileEventType =
+  | "uploaded"
+  | "metadata_changed"
+  | "projects_changed"
+  | "renamed"
+  | "moved"
+  | "trashed"
+  | "restored";
+
+export interface FileCollection {
+  id: string;
+  name: string;
+  kind: CollectionKind;
+  projectId: string | null;
+  sampleOwned: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FileProjectLink {
+  fileId: string;
+  projectId: string;
+  createdAt: string;
+}
+
+export interface LibraryFileMetadata {
+  fileId: string;
+  collectionId: string;
+  origin: FileOrigin;
+  contentKey: string | null;
+  managedFolderId: string | null;
+  displayName: string;
+  contributorId: string | null;
+  availability: FileAvailability;
+  trashedAt: string | null;
+  sampleOwned: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagedFolder {
+  id: string;
+  collectionId: string;
+  parentId: string | null;
+  displayName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DemoProfile {
+  id: DemoProfileId;
+  displayName: string;
+  isSystemAdministrator: boolean;
+}
+
+export interface CollectionGrant {
+  profileId: DemoProfileId;
+  collectionId: string;
+  canRead: boolean;
+  canContribute: boolean;
+  canOrganize: boolean;
+}
+
+export interface FileEvent {
+  id: string;
+  fileId: string;
+  eventType: FileEventType;
+  actorId: DemoProfileId | string;
+  occurredAt: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+}
+
+/** Library identity is independent from the optional legacy primary project. */
+export interface LibraryFileIdentity {
+  id: string;
+  primaryProjectId: string | null;
+  projects: readonly FileProjectLink[];
+  library: LibraryFileMetadata;
+}
+
+/** Facts returned by file APIs; legacy review details stay internal. */
+export interface PublicFile {
+  id: string;
+  primaryProjectId: string | null;
+  projects: readonly FileProjectLink[];
+  filename: string;
+  displayName: string;
+  extension: string;
+  sizeBytes: number;
+  modifiedAt: string;
+  documentType: string;
+  organization: DocumentOrganization;
+  origin: FileOrigin;
+  availability: FileAvailability;
+  versions: {
+    supersedes: readonly string[];
+    supersededBy: readonly string[];
+  };
+  preview: PreviewDescriptor | null;
+}
+
 export type ReviewDecision = "approve" | "return";
 
 export type RelationType =
@@ -111,7 +257,7 @@ export interface FindingFixture {
   confidence: number;
 }
 
-export interface ScenarioFileFixture {
+export interface ScenarioFileFixture extends DocumentOrganization {
   id: string;
   filename: string;
   sourcePath: string;
@@ -145,7 +291,7 @@ export interface Project {
   updatedAt: string;
 }
 
-export interface DocumentFile {
+export interface DocumentFile extends DocumentOrganization {
   id: string;
   projectId: string;
   filename: string;

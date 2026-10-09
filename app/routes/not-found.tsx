@@ -6,7 +6,7 @@ export default function NotFound() {
       <h1>Este espacio no existe.</h1>
       <p>Verifica el proyecto o vuelve al inicio de la demo.</p>
       <Link className="button" to="/file">
-        Volver a proyectos
+        Volver a archivos
       </Link>
     </main>
   );

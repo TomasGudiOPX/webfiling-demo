@@ -4,13 +4,16 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   addMockedUpload,
   confirmMockedUpload,
+  getFile,
   getHealth,
   getProject,
   getRelationGraph,
   listFindings,
   listProjectFiles,
+  openDatabase,
   resetDemoFixtures,
   reviewFile,
+  searchFileCounts,
   searchFiles,
   seedFixtures,
   updateFinding,
@@ -20,71 +23,158 @@ import {
   type ReconstructionResult,
 } from "../.server/reconstruction.server";
 import { getScenario, scenarioRegistry } from "../scenarios";
+import { parseSearchFilters, workspaceUrl } from "../search-filters";
+import { DISCIPLINE_TAGS, DOCUMENT_CATEGORIES, LOCATION_TAGS } from "../types";
+import {
+  groupDocumentRevisions,
+  matchRevisionGroups,
+  relatedDocumentUrl,
+  supersessionPredecessors,
+} from "../document-navigation";
 import { RelationGraph } from "../components/relation-graph";
 import { DocumentPreview } from "../components/document-preview";
 import {
   listDecisionEvents,
   listReviewItems,
 } from "../.server/governance.server";
+import { readableFileIds } from "../.server/file-access.server";
+import { resolveDemoProfile } from "../.server/profile-session.server";
 import type {
   AsOfDocument,
   AsOfDocumentDecision,
   DocumentFile,
   FindingState,
+  SearchResult,
 } from "../types";
+import type { SearchFilters } from "../search-filters";
 
 export function loader({ params, request }: LoaderFunctionArgs) {
-  seedFixtures();
+  const db = openDatabase();
+  seedFixtures(db);
+  const readableIds = new Set(readableFileIds(resolveDemoProfile(request), db));
   const scenario = getScenario(params.projectSlug ?? "");
   if (!scenario) throw redirect("/file");
-  const project = getProject(scenario.slug);
+  const project = getProject(scenario.slug, db);
   if (!project) throw redirect("/file");
 
   const url = new URL(request.url);
-  const query = url.searchParams.get("q") ?? "";
-  const scope = url.searchParams.get("scope") === "all" ? "all" : "project";
-  const status = url.searchParams.get("status") ?? "";
-  const type = url.searchParams.get("type") ?? "";
-  const timeframe = ["7d", "30d", "90d", "year"].includes(
-    url.searchParams.get("timeframe") ?? "",
-  )
-    ? (url.searchParams.get("timeframe") ?? "")
-    : "";
-  const sort = ["recent", "oldest", "name"].includes(
-    url.searchParams.get("sort") ?? "",
-  )
-    ? (url.searchParams.get("sort") ?? "recent")
-    : "recent";
+  const parsedFilters = parseSearchFilters(url.searchParams);
+  const { filters, invalid: invalidFilters } = parsedFilters;
+  const { query, scope, status, type, timeframe, sort } = filters;
   const selectedId =
     url.searchParams.get("selected") ?? url.searchParams.get("evidence") ?? "";
-  let files =
-    query || scope === "all"
-      ? searchFiles(
-          query,
-          scope === "project" ? project.id : undefined,
-          status || undefined,
-        )
-      : listProjectFiles(project.id);
-  if (type) files = files.filter((file) => file.documentType === type);
-  if (timeframe) {
-    const days = timeframe === "year" ? 365 : Number.parseInt(timeframe, 10);
-    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-    files = files.filter((file) => Date.parse(file.modifiedAt) >= cutoff);
-  }
-  files = [...files].sort((left, right) => {
-    if (sort === "name")
-      return left.filename.localeCompare(right.filename, "es");
-    const difference =
-      Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt);
-    return sort === "oldest" ? -difference : difference;
-  });
-  const selected =
-    files.find((file) => file.id === selectedId) ?? files[0] ?? null;
+  const files = searchFiles(
+    filters,
+    scope === "project" ? project.id : undefined,
+    db,
+    [...readableIds],
+  );
+  const selected = selectedId
+    ? (readableIds.has(selectedId) ? getFile(selectedId, db) : null)
+    : files[0] ?? null;
+  const selectedProject = selected ? getProject(selected.projectId, db) : null;
 
-  const allFiles = listProjectFiles(project.id);
-  const openReviewItems = listReviewItems({}).filter(
+  const allFiles = listProjectFiles(project.id, db).filter((file) =>
+    readableIds.has(file.id),
+  );
+  const contextProjectIds = new Set([
+    project.id,
+    ...files.map((file) => file.projectId),
+    ...(selected ? [selected.projectId] : []),
+  ]);
+  const contextFiles = [...contextProjectIds].flatMap((projectId) =>
+    listProjectFiles(projectId, db).filter((file) => readableIds.has(file.id)),
+  );
+  const filterGraph = (graph: ReturnType<typeof getRelationGraph>) => ({
+    nodes: graph.nodes.filter((node) => readableIds.has(node.id)),
+    edges: graph.edges.filter(
+      (edge) => readableIds.has(edge.from) && readableIds.has(edge.to),
+    ),
+  });
+  const graph = filterGraph(getRelationGraph(project.id, db));
+  const contextGraphs = [...contextProjectIds].map((projectId) =>
+    projectId === project.id ? graph : filterGraph(getRelationGraph(projectId, db)),
+  );
+  const contextRevisionGroups = groupDocumentRevisions(
+    contextFiles,
+    contextGraphs.flatMap((item) => item.edges),
+  );
+  const selectedRevisionGroup = contextRevisionGroups.find((group) =>
+    group.files.some((file) => file.id === selected?.id),
+  ) ?? null;
+  const revisionGroups = matchRevisionGroups(
+    contextRevisionGroups,
+    files,
+    selected?.id,
+  );
+  const relationEdges = [
+    ...new Map(
+      contextGraphs
+        .flatMap((item) => item.edges)
+        .map((edge) => [`${edge.from}\u0000${edge.to}\u0000${edge.type}`, edge]),
+    ).values(),
+  ];
+  const predecessorIds = selected
+    ? supersessionPredecessors(selected.id, contextFiles, relationEdges).map(
+        (file) => file.id,
+      )
+    : [];
+  const predecessors = contextFiles.filter((file) => predecessorIds.includes(file.id));
+  const reviewItems = listReviewItems({});
+  const openReviewItems = reviewItems.filter(
     (item) => item.projectId === project.id && item.state !== "completed",
   );
+  const selectedRelations = selected
+    ? relationEdges.filter(
+        (edge) => edge.from === selected.id || edge.to === selected.id,
+      )
+    : [];
+  const relatedDocuments = selectedRelations.map((relation) => {
+    const outgoing = relation.from === selected?.id;
+    const targetId = outgoing ? relation.to : relation.from;
+    const target = getFile(targetId);
+    const targetProject = target ? getProject(target.projectId) : null;
+    const targetFindings = targetProject ? listFindings(targetProject.id) : [];
+    const ownerFindings = selectedProject
+      ? listFindings(selectedProject.id)
+      : [];
+    const finding =
+      relation.type === "awaiting confirmation"
+        ? [...ownerFindings, ...targetFindings].find(
+            (item) =>
+              item.type === "uncertain_relation" &&
+              (item.fileId === selected?.id || item.fileId === targetId),
+          )
+        : undefined;
+    const reviewItem = finding
+      ? reviewItems.find(
+          (item) => item.targetKind === "finding" && item.targetId === finding.id,
+        )
+      : undefined;
+    const targetSlug = targetProject?.slug;
+    return {
+      relation,
+      direction: outgoing ? "outgoing" as const : "incoming" as const,
+      targetId,
+      target,
+      targetProject,
+      href: relatedDocumentUrl(
+        target && targetSlug ? { ...target, projectSlug: targetSlug } : null,
+        selected?.projectId ?? "",
+        filters,
+      ),
+      finding,
+      reviewHref: finding
+        ? reviewItem
+          ? `/file/review?selected=${encodeURIComponent(reviewItem.id)}`
+          : "/file/review"
+        : null,
+    };
+  });
+  const selectedOutsideResults = Boolean(
+    selectedId && selected && !files.some((file) => file.id === selected.id),
+  );
+  const selectedUnavailable = Boolean(selectedId && !selected);
 
   const at = url.searchParams.get("at") ?? "";
   const asOf: ReconstructionResult | null = at
@@ -96,16 +186,34 @@ export function loader({ params, request }: LoaderFunctionArgs) {
     scenarios: scenarioRegistry,
     project,
     files,
+    revisionGroups,
+    selectedRevisionGroup,
+    displayedDocumentCount: revisionGroups.length,
+    predecessors,
+    filters,
+    counts: searchFileCounts(
+      filters,
+      scope === "project" ? project.id : undefined,
+    ),
     selected,
+    selectedProject,
+    selectedRelations,
+    relatedDocuments,
+    selectedOutsideResults,
+    selectedUnavailable,
     query,
     scope,
     status,
     type,
     timeframe,
     sort,
+    category: filters.category,
+    discipline: filters.discipline,
+    location: filters.location,
+    invalidFilters,
     at,
     asOf,
-    graph: getRelationGraph(project.id),
+    graph,
     findings: listFindings(project.id),
     timeline: selected ? listDecisionEvents({ fileId: selected.id }) : [],
     health: getHealth(),
@@ -217,7 +325,7 @@ const sortLabels: Record<string, string> = {
 const relationLabels: Record<string, string> = {
   supersedes: "reemplaza",
   "related to": "relacionado con",
-  "awaiting confirmation": "requiere confirmación",
+  "awaiting confirmation": "por confirmar",
 };
 
 function queryFor(values: Record<string, string | undefined>) {
@@ -239,24 +347,20 @@ function documentTypeLabel(type: string) {
   return documentTypeLabels[type] ?? type;
 }
 
-function relationLabel(relation: string | null | undefined) {
-  return relation
-    ? (relationLabels[relation] ?? relation)
-    : "Sin relación registrada";
-}
-
 function Collapsible({
   title,
   count,
   hint,
   children,
+  initiallyOpen = false,
 }: {
   title: string;
   count?: number;
   hint?: string;
   children: ReactNode;
+  initiallyOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(initiallyOpen);
   return (
     <section className={`sidebar-section ${open ? "is-open" : "is-collapsed"}`}>
       <button
@@ -306,6 +410,70 @@ function toLocalInput(iso: string) {
   const date = new Date(iso);
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function HistoricalMode({
+  project,
+  at,
+  asOf,
+  filters,
+}: {
+  project: { slug: string; name: string };
+  at: string;
+  asOf: ReconstructionResult | null;
+  filters: SearchFilters;
+}) {
+  const validDate = Number.isFinite(Date.parse(at));
+  return (
+    <main className="shell workspace-shell historical-mode" data-testid="historical-mode">
+      <header className="topbar">
+        <Link className="brand" to="/file">webfiling<span className="brand-dot">·</span></Link>
+        <span className="badge-tag">HISTÓRICO · SOLO LECTURA</span>
+      </header>
+      <section className="project-heading">
+        <div>
+          <p className="eyebrow">RECONSTRUCCIÓN TEMPORAL</p>
+          <h1>{project.name}</h1>
+          <p className="project-subtitle">Estado reconstruido al {validDate ? new Date(at).toLocaleString("es-AR") : at}</p>
+        </div>
+        <Link className="button secondary" to={workspaceUrl(project.slug, filters)}>Volver a hoy</Link>
+      </section>
+      <p className="selection-context" role="status" data-testid="filters-paused">
+        Los filtros y datos actuales están pausados; esta vista muestra únicamente decisiones y documentos reconstruidos para la fecha elegida.
+      </p>
+      <details className="asof-control" open>
+        <summary>Ver otra fecha</summary>
+        <form className="asof-form" onSubmit={(event) => {
+          event.preventDefault();
+          const value = new FormData(event.currentTarget).get("at");
+          if (typeof value === "string" && value) {
+            const parsed = new Date(value);
+            if (Number.isFinite(parsed.getTime())) window.location.assign(`/file/${project.slug}?at=${encodeURIComponent(parsed.toISOString())}`);
+          }
+        }}>
+          <label htmlFor="historical-at">Fecha y hora:</label>
+          <input id="historical-at" name="at" type="datetime-local" defaultValue={validDate ? toLocalInput(at) : ""} />
+          <button className="button sm" type="submit">Aplicar</button>
+        </form>
+        <div className="asof-chips" aria-label="Momentos de decisión conocidos">
+          {AS_OF_MOMENTS.map((moment) => <Link className="search-chip" key={moment.at} to={`/file/${project.slug}?at=${encodeURIComponent(moment.at)}`}>{moment.label}</Link>)}
+        </div>
+      </details>
+      {asOf?.snapshot ? (
+        <section className="panel historical-documents" aria-label="Documentos y decisiones en la fecha">
+          <h2>Documentos y decisiones en esa fecha</h2>
+          <div className="file-list" data-testid="asof-view">
+            {asOf.snapshot.documents.map((document) => <AsOfDocumentRow key={document.id} document={document} />)}
+          </div>
+        </section>
+      ) : (
+        <div className="empty-state" data-testid="asof-error" role="alert">
+          <h2>No se pudo reconstruir el estado</h2>
+          <p>{asOf?.error?.message ?? "Fecha no válida."}</p>
+        </div>
+      )}
+    </main>
+  );
 }
 
 function decisionInEffect(decision: AsOfDocumentDecision) {
@@ -360,30 +528,63 @@ function AsOfDocumentRow({ document }: { document: AsOfDocument }) {
   );
 }
 
-function AsOfEvidencePanel({ asOf }: { asOf: ReconstructionResult | null }) {
-  if (!asOf || !asOf.snapshot) return null;
-  const current = asOf.snapshot.documents.filter((document) => document.current);
+function FileResultRow({
+  file,
+  selected,
+  projectSlug,
+  filters,
+  findingCount,
+  onSelect,
+}: {
+  file: SearchResult;
+  selected: boolean;
+  projectSlug: string;
+  filters: SearchFilters;
+  findingCount: number;
+  onSelect: () => void;
+}) {
+  const ext = file.extension.replace(".", "").toUpperCase() || "DOC";
   return (
-    <div className="panel preview-panel">
-      <p className="eyebrow">RECONSTRUCCIÓN / SOLO LECTURA</p>
-      <h2>Estado a esta fecha</h2>
-      <p className="muted">
-        Esta vista es de solo lectura: no permite aprobar, devolver, subir ni
-        modificar documentos.
-      </p>
-      <div className="asof-current-list">
-        <p className="eyebrow">VIGENTES EN ESA FECHA</p>
-        {current.length ? (
-          current.map((document) => (
-            <p key={document.id}>
-              <strong>{document.filename}</strong>
-            </p>
-          ))
-        ) : (
-          <p className="muted">Ningún documento vigente a esta fecha.</p>
-        )}
+    <article
+      className={`file-row ${selected ? "selected" : ""} ${file.status === "approved" ? "row-approved" : ""} ${file.status === "superseded" ? "row-superseded" : ""}`}
+      data-testid={`file-row-${file.id}`}
+    >
+      <div className={`file-icon ext-${ext.toLowerCase()}`}>{ext}</div>
+      <div className="file-main">
+        <div className="file-title">
+          <strong>{file.filename}</strong>
+          <span className={`status ${file.status}`}>{labels[file.status] ?? file.status}</span>
+          {findingCount > 0 && (
+            <span className="finding-badge" title="Hallazgos abiertos detectados por el índice">
+              ⚠ {findingCount} hallazgo(s)
+            </span>
+          )}
+        </div>
+        <p className="file-meta">
+          <span>{documentTypeLabel(file.documentType)}</span>
+          <span>·</span>
+          <span>{new Date(file.modifiedAt).toLocaleDateString("es-AR")}</span>
+          {file.sizeBytes > 0 && (
+            <>
+              <span>·</span>
+              <span>{(file.sizeBytes / 1024 / 1024).toFixed(1)} MB</span>
+            </>
+          )}
+        </p>
+        <small className="result-project">Proyecto: {file.projectName}</small>
+        <small className="file-explanation">{file.explanation[0]}</small>
       </div>
-    </div>
+      <div className="file-action-cell">
+        <Link
+          className="button secondary sm"
+          preventScrollReset
+          onClick={onSelect}
+          to={workspaceUrl(projectSlug, filters, file.id)}
+        >
+          Ver evidencia
+        </Link>
+      </div>
+    </article>
   );
 }
 
@@ -397,13 +598,24 @@ export default function Workspace({
     scenario,
     scenarios,
     files,
+    revisionGroups,
+    selectedRevisionGroup,
+    displayedDocumentCount,
+    filters,
+    counts,
     selected,
+    selectedProject,
+    relatedDocuments,
+    selectedOutsideResults,
+    selectedUnavailable,
+    predecessors,
     query,
     scope,
     status,
     type,
     timeframe,
     sort,
+    invalidFilters,
     at,
     asOf,
     graph,
@@ -420,13 +632,23 @@ export default function Workspace({
   const [showExplorerMock, setShowExplorerMock] = useState(false);
   const [offlineMode, setOfflineMode] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
+  const [compareChoice, setCompareChoice] = useState<{
+    fileId: string;
+    predecessorId: string;
+  } | null>(null);
   const [rightOpen, setRightOpen] = useState(true);
   const [rightPanel, setRightPanel] = useState<"evidence" | "actions">(
     "evidence",
   );
 
-  // For version comparison Rev C vs Rev B
-  const supersededFile = files.find((f) => f.status === "superseded");
+  const comparisonPredecessor =
+    predecessors.length === 1
+      ? predecessors[0]
+      : predecessors.find(
+          (file) =>
+            file.id === compareChoice?.predecessorId &&
+            selected?.id === compareChoice.fileId,
+        ) ?? null;
 
   // Data detection surfacing: open findings per file + project total
   const openFindingsByFile = new Map<string, number>();
@@ -440,6 +662,10 @@ export default function Workspace({
   const openFindingsCount = findings.filter(
     (finding) => finding.state === "open",
   ).length;
+
+  if (asOfActive) {
+    return <HistoricalMode project={project} at={at} asOf={asOf} filters={filters} />;
+  }
 
   return (
     <main className="shell workspace-shell">
@@ -558,32 +784,8 @@ export default function Workspace({
       </section>
 
       {/* As-of reconstruction control */}
-      <section
-        className="asof-control"
-        data-testid="asof-control"
-        aria-label="Reconstrucción as-of"
-      >
-        <div className="asof-control-head">
-          <p className="eyebrow">CONSULTA TEMPORAL</p>
-          <h2 className="asof-title">Así estaba</h2>
-        </div>
-        {asOfActive ? (
-          <div className="asof-control-body">
-            <span className="asof-label" data-testid="asof-label">
-              Viendo la obra al {new Date(at).toLocaleString("es-AR")}
-            </span>
-            <Link className="button secondary sm" to={`/file/${project.slug}`}>
-              Volver a hoy
-            </Link>
-          </div>
-        ) : (
-          <Link
-            className="button secondary sm"
-            to={`/file/${project.slug}?at=${AS_OF_MOMENTS[1].at}`}
-          >
-            ¿Qué estaba vigente en otra fecha?
-          </Link>
-        )}
+      <details className="asof-control" data-testid="asof-control">
+        <summary>Ver a una fecha</summary>
         <form
           className="asof-form"
           onSubmit={(event) => {
@@ -591,9 +793,7 @@ export default function Workspace({
             const value = new FormData(event.currentTarget).get("at");
             if (typeof value !== "string" || !value) return;
             const iso = new Date(value).toISOString();
-            navigate(
-              `/file/${project.slug}?${queryFor({ at: iso }).toString()}`,
-            );
+            if (Number.isFinite(Date.parse(iso))) navigate(`/file/${project.slug}?${queryFor({ at: iso }).toString()}`);
           }}
         >
           <label htmlFor="at">Fecha y hora:</label>
@@ -601,7 +801,7 @@ export default function Workspace({
             id="at"
             name="at"
             type="datetime-local"
-            defaultValue={asOfActive ? toLocalInput(at) : ""}
+            defaultValue=""
           />
           <button className="button sm" type="submit">
             Aplicar
@@ -618,7 +818,7 @@ export default function Workspace({
             </Link>
           ))}
         </div>
-      </section>
+      </details>
 
       {/* Realistic Windows File Explorer Mockup Drawer (Screen 3: Contrast Sells) */}
       {showExplorerMock && (
@@ -767,61 +967,38 @@ export default function Workspace({
                 </Link>
               )}
             </div>
-            <select
-              name="scope"
-              defaultValue={scope}
-              aria-label="Alcance de búsqueda"
-            >
-              <option value="project">Solo {project.name}</option>
-              <option value="all">Todos los escenarios</option>
-            </select>
-            <select
-              name="status"
-              defaultValue={status}
-              aria-label="Filtrar por estado"
-            >
-              <option value="">Todos los estados</option>
-              {Object.entries(labels).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-            <select
-              name="type"
-              defaultValue={type}
-              aria-label="Filtrar por tipo de documento"
-            >
-              <option value="">Todos los tipos</option>
-              {Object.entries(documentTypeLabels).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-            <select
-              name="timeframe"
-              defaultValue={timeframe}
-              aria-label="Filtrar por fecha de actualización"
-            >
-              <option value="">Cualquier fecha</option>
-              {Object.entries(timeframeLabels).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-            <select
-              name="sort"
-              defaultValue={sort}
-              aria-label="Ordenar documentos"
-            >
-              {Object.entries(sortLabels).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
+            <details className="advanced-filter-disclosure">
+              <summary>Filtros avanzados{status || type || timeframe || sort !== "recent" || scope === "all" || filters.discipline || filters.location ? " · activos" : ""}</summary>
+              <div className="advanced-filter-controls">
+                <select name="scope" defaultValue={scope} aria-label="Alcance de búsqueda">
+                  <option value="project">Solo {project.name}</option>
+                  <option value="all">Todos los escenarios</option>
+                </select>
+                <select name="status" defaultValue={status} aria-label="Filtrar por estado">
+                  <option value="">Todos los estados</option>
+                  {Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+                <select name="type" defaultValue={type} aria-label="Filtrar por tipo de documento">
+                  <option value="">Todos los tipos</option>
+                  {Object.entries(documentTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+                <select name="discipline" defaultValue={filters.discipline} aria-label="Filtrar por disciplina">
+                  <option value="">Todas las disciplinas</option>
+                  {Object.entries(DISCIPLINE_TAGS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+                <select name="location" defaultValue={filters.location} aria-label="Filtrar por ubicación">
+                  <option value="">Todas las ubicaciones</option>
+                  {Object.entries(LOCATION_TAGS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+                <select name="timeframe" defaultValue={timeframe} aria-label="Filtrar por fecha de actualización">
+                  <option value="">Cualquier fecha</option>
+                  {Object.entries(timeframeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+                <select name="sort" defaultValue={sort} aria-label="Ordenar documentos">
+                  {Object.entries(sortLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </div>
+            </details>
             <button className="button search-submit" type="submit">
               <svg
                 width="16"
@@ -862,27 +1039,16 @@ export default function Workspace({
               <Link
                 key={chip}
                 className="search-chip"
-                to={{
-                  pathname: `/file/${project.slug}`,
-                  search: queryFor({
-                    q: chip,
-                    scope,
-                    status,
-                    type,
-                    timeframe,
-                    sort,
-                  }).toString(),
-                }}
+                to={workspaceUrl(project.slug, { ...filters, query: chip })}
               >
                 {chip}
               </Link>
             ))}
           </div>
 
-          <div
-            className="search-chips timeframes"
-            aria-label="Períodos rápidos"
-          >
+          <details className="timeframe-disclosure">
+          <summary>Períodos rápidos</summary>
+          <div className="search-chips timeframes" aria-label="Períodos rápidos">
             <span className="chip-label">Actualizado:</span>
             {[
               ["", "Todo"],
@@ -894,22 +1060,16 @@ export default function Workspace({
               <Link
                 key={value || "all"}
                 className={`search-chip ${timeframe === value ? "active" : ""}`}
-                to={{
-                  pathname: `/file/${project.slug}`,
-                  search: queryFor({
-                    q: query,
-                    scope,
-                    status,
-                    type,
-                    timeframe: value,
-                    sort,
-                  }).toString(),
-                }}
+                to={workspaceUrl(project.slug, {
+                  ...filters,
+                  timeframe: value as typeof timeframe,
+                })}
               >
                 {label}
               </Link>
             ))}
           </div>
+          </details>
 
           <small className="scope-note">
             Alcance activo:{" "}
@@ -918,10 +1078,45 @@ export default function Workspace({
             </strong>
             {status ? ` · ${labels[status] ?? status}` : ""}
             {type ? ` · ${documentTypeLabels[type] ?? type}` : ""}
+            {filters.discipline ? ` · ${DISCIPLINE_TAGS[filters.discipline]}` : ""}
+            {filters.location ? ` · ${LOCATION_TAGS[filters.location]}` : ""}
             {timeframe ? ` · ${timeframeLabels[timeframe]}` : ""}
             {sort !== "recent" ? ` · ${sortLabels[sort]}` : ""}
           </small>
         </Form>
+        {invalidFilters.length > 0 && (
+          <p className="filter-warning" role="alert">
+            Se descartaron filtros no compatibles: {invalidFilters
+              .map(({ key, value }) => `${key}=${value}`)
+              .join(", ")}
+          </p>
+        )}
+        <nav className="category-navigation" aria-label="Categorías de documentos">
+          <Link
+            className={!filters.category ? "category-chip active" : "category-chip"}
+            aria-current={!filters.category ? "page" : undefined}
+            to={workspaceUrl(project.slug, { ...filters, category: "" })}
+          >
+            Todos <span>{Object.values(counts.categoryCounts).reduce((sum, count) => sum + count, 0)}</span>
+          </Link>
+          {DOCUMENT_CATEGORIES.map(({ id, label }) => (
+            <Link
+              className={filters.category === id ? "category-chip active" : "category-chip"}
+              aria-current={filters.category === id ? "page" : undefined}
+              key={id}
+              to={workspaceUrl(project.slug, { ...filters, category: id })}
+            >
+              {label} <span>{counts.categoryCounts[id] ?? 0}</span>
+            </Link>
+          ))}
+          <Link
+            className={filters.category === "unclassified" ? "category-chip active" : "category-chip"}
+            aria-current={filters.category === "unclassified" ? "page" : undefined}
+            to={workspaceUrl(project.slug, { ...filters, category: "unclassified" })}
+          >
+            Sin clasificar <span>{counts.categoryCounts.unclassified ?? 0}</span>
+          </Link>
+        </nav>
       </section>
 
       {/* Workspace Main Grid */}
@@ -940,8 +1135,26 @@ export default function Workspace({
                 {query ? `Resultados para “${query}”` : "Documentos de la obra"}
               </h2>
             </div>
-            <span className="badge-count">{files.length} archivos</span>
+            <span className="badge-count">
+              {files.length} archivos · {displayedDocumentCount} documentos
+              {counts.truncated && ` · mostrando ${files.length}`}
+            </span>
           </div>
+
+          {selectedOutsideResults && selected && (
+            <p className="selection-context" role="status" data-testid="selected-outside-results">
+              Este documento está <strong>fuera de los resultados actuales</strong>; se conserva como contexto de evidencia.
+              {" "}
+              <Link to={workspaceUrl(project.slug, filters)}>Volver a los resultados</Link>
+            </p>
+          )}
+          {selectedUnavailable && (
+            <p className="filter-warning" role="alert" data-testid="selected-unavailable">
+              El documento solicitado ya no está disponible. No se seleccionó otro documento en su lugar.
+              {" "}
+              <Link to={workspaceUrl(project.slug, filters)}>Volver a los resultados</Link>
+            </p>
+          )}
 
           {openFindingsCount > 0 && (
             <p className="findings-summary" data-testid="findings-summary">
@@ -950,54 +1163,8 @@ export default function Workspace({
             </p>
           )}
 
-          {/* Money Shot: Explainability Card (SYNCON Principle) */}
-          {selected && (
-            <div
-              className="explainability-box"
-              aria-label="Explicabilidad del resultado"
-            >
-              <div className="explain-header">
-                <span className="explain-sparkle">✨</span>
-                <strong>Explicabilidad del documento seleccionado</strong>
-              </div>
-              <p className="explain-text">
-                {selected.status === "approved"
-                  ? `Elegido porque pertenece a ${project.name}, cuenta con aprobación técnica vigente de jefatura de obra y está listo para ejecución.`
-                  : selected.status === "superseded"
-                    ? `Documento SUPERADO: Ha sido reemplazado por una revisión posterior más reciente y no debe ser ejecutado en obra.`
-                    : selected.status === "pending_review"
-                      ? `Sugerencia de clasificación generada por el índice. Requiere confirmación humana antes de consolidarse.`
-                      : `Documento pendiente de metadatos o relación formal.`}
-              </p>
-              {selected.relation && (
-                <div className="explain-relation">
-                  <span>Relación registrada:</span>
-                  <mark>{relationLabel(selected.relation)}</mark>
-                  <small>({selected.relation})</small>
-                </div>
-              )}
-            </div>
-          )}
-
           {/* File List */}
-          {asOfActive ? (
-            asOf?.snapshot ? (
-              <div className="file-list" data-testid="asof-view">
-                {asOf.snapshot.documents.map((document) => (
-                  <AsOfDocumentRow key={document.id} document={document} />
-                ))}
-              </div>
-            ) : (
-              <div
-                className="empty-state"
-                data-testid="asof-error"
-                role="alert"
-              >
-                <h3>No se pudo reconstruir el estado</h3>
-                <p>{asOf?.error?.message ?? "Fecha no válida."}</p>
-              </div>
-            )
-          ) : files.length === 0 ? (
+          {files.length === 0 ? (
             <div className="empty-state">
               <h3>No hay resultados todavía</h3>
               <p>
@@ -1007,119 +1174,43 @@ export default function Workspace({
             </div>
           ) : (
             <div className="file-list">
-              {files.map((file) => {
-                const isSelected = file.id === selected?.id;
-                const ext =
-                  file.extension.replace(".", "").toUpperCase() || "DOC";
-                const isApproved = file.status === "approved";
-                const isSuper = file.status === "superseded";
-
-                return (
-                  <article
-                    className={`file-row ${isSelected ? "selected" : ""} ${isApproved ? "row-approved" : ""} ${
-                      isSuper ? "row-superseded" : ""
-                    }`}
+              {revisionGroups.map(({ group, matchingFiles, representative }) => {
+                const rows = matchingFiles.map((file) => (
+                  <FileResultRow
                     key={file.id}
+                    file={file}
+                    selected={file.id === selected?.id}
+                    projectSlug={file.projectSlug}
+                    filters={filters}
+                    findingCount={openFindingsByFile.get(file.id) ?? 0}
+                    onSelect={() => setRightPanel("evidence")}
+                  />
+                ));
+                if (group.files.length === 1 && !group.ambiguous) return rows[0];
+                return (
+                  <details
+                    className={`revision-group ${group.ambiguous ? "is-ambiguous" : ""}`}
+                    key={group.id}
+                    open={matchingFiles.some((file) => file.id === selected?.id)}
                   >
-                    <div className={`file-icon ext-${ext.toLowerCase()}`}>
-                      {ext}
-                    </div>
-                    <div className="file-main">
-                      <div className="file-title">
-                        <strong>{file.filename}</strong>
-                        <span className={`status ${file.status}`}>
-                          {labels[file.status] ?? file.status}
-                        </span>
-                        {(openFindingsByFile.get(file.id) ?? 0) > 0 && (
-                          <span
-                            className="finding-badge"
-                            title="Hallazgos abiertos detectados por el índice"
-                          >
-                            ⚠ {openFindingsByFile.get(file.id)} hallazgo(s)
-                          </span>
-                        )}
-                      </div>
-                      <p className="file-meta">
-                        <span>{documentTypeLabel(file.documentType)}</span>
-                        <span>·</span>
-                        <span>
-                          {new Date(file.modifiedAt).toLocaleDateString(
-                            "es-AR",
-                          )}
-                        </span>
-                        {file.sizeBytes > 0 && (
-                          <>
-                            <span>·</span>
-                            <span>
-                              {(file.sizeBytes / 1024 / 1024).toFixed(1)} MB
-                            </span>
-                          </>
-                        )}
-                      </p>
-
-                      {/* Explicit labels for Playwright e2e compatibility */}
-                      {"projectName" in file && (
-                        <div className="file-project-tag">
-                          <small className="result-project">
-                            Proyecto: {(file as any).projectName}
-                          </small>
-                        </div>
+                    <summary>
+                      <strong>{representative.filename}</strong>
+                      <span>{matchingFiles.length} versión(es) coincidentes</span>
+                      {group.current && matchingFiles.some((file) => file.id === group.current?.id) && (
+                        <span>Vigente: {group.current.filename}</span>
                       )}
-
-                      {"explanation" in file && (
-                        <small className="file-explanation">
-                          {(file as any).explanation[0]}
-                        </small>
-                      )}
-                    </div>
-
-                    <div className="file-action-cell">
-                      <Link
-                        className="button secondary sm"
-                        preventScrollReset
-                        onClick={() => setRightPanel("evidence")}
-                        to={{
-                          pathname: `/file/${project.slug}`,
-                          search: queryFor({
-                            q: query,
-                            scope,
-                            status,
-                            type,
-                            selected: file.id,
-                          }).toString(),
-                        }}
-                      >
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          aria-hidden="true"
-                        >
-                          <path
-                            d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinejoin="round"
-                          />
-                          <circle
-                            cx="12"
-                            cy="12"
-                            r="3"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                          />
-                        </svg>
-                        Ver evidencia
-                      </Link>
-                    </div>
-                  </article>
+                      {group.ambiguous && <span>Linaje ambiguo</span>}
+                    </summary>
+                    <div className="revision-rows">{rows}</div>
+                  </details>
                 );
               })}
             </div>
           )}
 
-          {/* Lower Grid: Document Relationship Map & Interactive Graph */}
+          {/* Full relationship map is secondary; direct context remains in evidence. */}
+          <details className="advanced-map-disclosure">
+            <summary>Mapa completo de relaciones</summary>
           <section className="lower-grid">
             <div className="panel relation-panel">
               <div className="section-heading">
@@ -1133,7 +1224,7 @@ export default function Workspace({
                 graph={graph}
                 selectedId={selected?.id}
                 projectSlug={project.slug}
-                preserve={{ q: query, scope, status }}
+                preserve={filters}
                 onSelect={() => setRightPanel("evidence")}
               />
 
@@ -1162,7 +1253,7 @@ export default function Workspace({
                           <Link
                             className="relation-doc"
                             preventScrollReset
-                            to={`/file/${project.slug}?${queryFor({ selected: edge.from }).toString()}`}
+                            to={workspaceUrl(project.slug, filters, edge.from)}
                           >
                             <span
                               className={`relation-icon ext-${extOf(from?.label ?? "").toLowerCase()}`}
@@ -1181,7 +1272,7 @@ export default function Workspace({
                           <Link
                             className="relation-doc"
                             preventScrollReset
-                            to={`/file/${project.slug}?${queryFor({ selected: edge.to }).toString()}`}
+                            to={workspaceUrl(project.slug, filters, edge.to)}
                           >
                             <span
                               className={`relation-icon ext-${extOf(to?.label ?? "").toLowerCase()}`}
@@ -1202,6 +1293,7 @@ export default function Workspace({
               </div>
             </div>
           </section>
+          </details>
         </div>
 
         {/* Right column: Evidencia / Gobernanza */}
@@ -1320,41 +1412,76 @@ export default function Workspace({
                       </span>
                     </div>
 
-                    {/* Version Comparison Action if superseded exists */}
-                    {supersededFile && selected.status === "approved" && (
+                    {predecessors.length === 1 && (
                       <button
                         type="button"
                         className="compare-toggle-button"
-                        onClick={() => setShowCompare(!showCompare)}
+                        onClick={() => setShowCompare((value) => !value)}
                       >
                         {showCompare
-                          ? "✕ Ocultar comparación"
-                          : "⚖️ Comparar con versión anterior (Rev B superada)"}
+                          ? "Ocultar comparación"
+                          : `Comparar con ${predecessors[0].filename}`}
                       </button>
                     )}
+                    {predecessors.length > 1 && (
+                      <div className="compare-choice">
+                        <label>
+                          Elegir predecesor
+                          <select
+                            aria-label="Elegir predecesor para comparar"
+                            value={
+                              compareChoice?.fileId === selected.id
+                                ? compareChoice.predecessorId
+                                : ""
+                            }
+                            onChange={(event) => {
+                              setCompareChoice({
+                                fileId: selected.id,
+                                predecessorId: event.currentTarget.value,
+                              });
+                              setShowCompare(false);
+                            }}
+                          >
+                            <option value="">Selecciona una versión</option>
+                            {predecessors.map((predecessor) => (
+                              <option key={predecessor.id} value={predecessor.id}>
+                                {predecessor.filename} · {labels[predecessor.status]}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <button
+                          type="button"
+                          className="compare-toggle-button"
+                          disabled={!comparisonPredecessor}
+                          onClick={() => setShowCompare((value) => !value)}
+                        >
+                          Comparar versiones
+                        </button>
+                      </div>
+                    )}
 
-                    {showCompare && supersededFile && (
+                    {showCompare && selected && comparisonPredecessor && (
                       <div className="compare-drawer">
                         <div className="compare-col current">
-                          <span className="badge-tag success">
-                            VIGENTE (REV C)
-                          </span>
+                          <span className="badge-tag">Documento seleccionado</span>
                           <strong>{selected.filename}</strong>
                           <p>
-                            Aprobado para obra ·{" "}
+                            {labels[selected.status] ?? selected.status} ·{" "}
                             {new Date(selected.modifiedAt).toLocaleDateString(
                               "es-AR",
                             )}
                           </p>
                         </div>
                         <div className="compare-col old">
-                          <span className="badge-tag danger">
-                            SUPERADO (REV B)
-                          </span>
-                          <strong>{supersededFile.filename}</strong>
+                          <span className="badge-tag">Predecesor registrado</span>
+                          <strong>{comparisonPredecessor.filename}</strong>
                           <p>
-                            No construir con este plano · Reemplazado
-                            formalmente
+                            {labels[comparisonPredecessor.status] ??
+                              comparisonPredecessor.status}{" "}
+                            · {new Date(
+                              comparisonPredecessor.modifiedAt,
+                            ).toLocaleDateString("es-AR")}
                           </p>
                         </div>
                       </div>
@@ -1377,14 +1504,19 @@ export default function Workspace({
                     </div>
 
                     {/* Complete Provenance & Audit Fact Sheet */}
+                    <details className="evidence-disclosure">
+                      <summary>Procedencia y estado registrado</summary>
                     <dl className="evidence-facts">
                       <dt>Ruta en Servidor Z:\</dt>
                       <dd>
                         <code>{selected.sourcePath}</code>
                       </dd>
 
+                      <dt>Proyecto de origen</dt>
+                      <dd>{selectedProject?.name ?? "Proyecto no disponible"}</dd>
+
                       <dt>Origen</dt>
-                      <dd>{sourceLabel(selected, project, scenarios)}</dd>
+                      <dd>{sourceLabel(selected, selectedProject ?? project, scenarios)}</dd>
 
                       <dt>Estado autoritativo</dt>
                       <dd>
@@ -1393,32 +1525,12 @@ export default function Workspace({
                         </span>
                       </dd>
 
-                      <dt>Relación de versión</dt>
-                      <dd>
-                        {selected.relation ? (
-                          <span>
-                            {relationLabel(selected.relation)}{" "}
-                            <em>({selected.relation})</em>
-                          </span>
-                        ) : (
-                          "Sin relación registrada"
-                        )}
-                      </dd>
-
-                      {selected.reviewer && (
+                      {selected.reviewer && selected.reviewedAt && (
                         <>
-                          <dt>Aprobado por</dt>
+                          <dt>Revisado por</dt>
                           <dd>
                             <strong>{selected.reviewer}</strong>
-                            {selected.reviewedAt && (
-                              <small>
-                                {" "}
-                                ·{" "}
-                                {new Date(selected.reviewedAt).toLocaleString(
-                                  "es-AR",
-                                )}
-                              </small>
-                            )}
+                            <small>{" · "}{new Date(selected.reviewedAt).toLocaleString("es-AR")}</small>
                           </dd>
                         </>
                       )}
@@ -1430,11 +1542,68 @@ export default function Workspace({
                         </>
                       )}
                     </dl>
+                    </details>
+                    <section className="relation-list selected-relations" aria-label="Versiones del documento">
+                      <h3>Versiones</h3>
+                      {selectedRevisionGroup && selectedRevisionGroup.files.length > 1 ? (
+                        <>
+                          {selectedRevisionGroup.ambiguous && <p role="status">Linaje ambiguo: no se señala una versión vigente.</p>}
+                          {!selectedRevisionGroup.ambiguous && selectedRevisionGroup.current && <p>Vigente según relación explícita: <strong>{selectedRevisionGroup.current.filename}</strong></p>}
+                          <ul className="relation-cards">
+                            {selectedRevisionGroup.files.map((version) => (
+                              <li className="relation-card" key={version.id}>
+                                <span className={`status ${version.status}`}>{labels[version.status] ?? version.status}</span>
+                                <Link className="relation-doc" to={workspaceUrl(selectedProject?.slug ?? project.slug, filters, version.id)}>
+                                  {version.filename}{version.id === selected.id ? " · seleccionado" : ""}
+                                </Link>
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      ) : <p>No hay otras versiones vinculadas por una relación de reemplazo explícita.</p>}
+                    </section>
+                    <section className="relation-list selected-relations" aria-label="Relaciones directas del documento">
+                      <h3>Documentos relacionados</h3>
+                      {relatedDocuments.length ? (
+                        <ul className="relation-cards">
+                          {relatedDocuments.map(({ relation, direction, targetId, target, targetProject, finding, reviewHref, href }) => {
+                            const label = relation.type === "supersedes"
+                              ? direction === "outgoing" ? "Reemplaza" : "Reemplazado por"
+                              : relation.type === "awaiting confirmation"
+                                ? "Relación por confirmar"
+                                : "Relacionado con";
+                            return (
+                              <li className="relation-card selected-relation-card" key={`${relation.from}-${relation.to}-${relation.type}`}>
+                                <span className={`relation-type type-${relation.type.replaceAll(" ", "-")}`}>{label}</span>
+                                {target && href ? (
+                                  <Link className="relation-doc" preventScrollReset to={href}>
+                                    <span className={`relation-icon ext-${extOf(target.filename).toLowerCase()}`}>{extOf(target.filename)}</span>
+                                    <span className="relation-filename">{target.filename}</span>
+                                  </Link>
+                                ) : (
+                                  <span className="relation-unavailable" role="status">
+                                    Documento relacionado no disponible ({targetId})
+                                  </span>
+                                )}
+                                {targetProject && <small className="result-project">Proyecto: {targetProject.name}</small>}
+                                {finding && (
+                                  <small className="relation-uncertainty">
+                                    Relación sugerida; requiere confirmación humana. {reviewHref && <Link to={reviewHref}>Revisar hallazgo</Link>}
+                                  </small>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      ) : (
+                        <p>No hay relaciones directas registradas para este documento.</p>
+                      )}
+                    </section>
                     <section
                       className="relation-list"
                       aria-label="Decisiones del documento"
                     >
-                      <h3>Decisiones</h3>
+                      <h3>Historial</h3>
                       {timeline.length ? (
                         timeline.map((event) => (
                           <p key={event.id}>

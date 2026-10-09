@@ -5,3 +5,5 @@ build
 data/*.sqlite*
 playwright-report
 test-results
+data/managed-files/
+.test-data/
