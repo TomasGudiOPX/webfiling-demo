@@ -21,10 +21,17 @@ import { privateHeaders } from "./file-content.server";
 
 export async function loader({ request, params }: LoaderFunctionArgs) {
   try {
+    const profile = resolveDemoProfile(request);
+    const url = new URL(request.url);
+    if (url.searchParams.get("panel") === "rules" && profile === "system-administrator") {
+      url.pathname = "/settings/calendar";
+      url.searchParams.delete("panel");
+      throw redirect(url.pathname + url.search, { headers: privateHeaders });
+    }
     return Response.json(
       await browserModel(
-        resolveDemoProfile(request),
-        new URL(request.url),
+        profile,
+        url,
         params.projectSlug,
       ),
       { headers: privateHeaders },

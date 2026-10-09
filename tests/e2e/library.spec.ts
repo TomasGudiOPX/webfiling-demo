@@ -46,8 +46,18 @@ test("four profiles use all three views on desktop and mobile without overflow",
         const dimensions = await page.evaluate(() => ({
           content: document.documentElement.scrollWidth,
           viewport: document.documentElement.clientWidth,
+          overflowing: [...document.body.querySelectorAll("*")]
+            .map((element) => ({
+              selector: `${element.tagName.toLowerCase()}.${typeof element.className === "string" ? element.className.trim().replaceAll(" ", ".") : ""}`,
+              right: Math.round(element.getBoundingClientRect().right),
+              left: Math.round(element.getBoundingClientRect().left),
+              scrollWidth: element.scrollWidth,
+              clientWidth: element.clientWidth,
+            }))
+            .filter((element) => element.scrollWidth > element.clientWidth + 10 || element.right > document.documentElement.clientWidth + 2 || element.left < -2)
+            .slice(0, 5),
         }));
-        expect(dimensions.content).toBeLessThanOrEqual(dimensions.viewport);
+        expect(dimensions.content, JSON.stringify(dimensions.overflowing)).toBeLessThanOrEqual(dimensions.viewport);
         if (width === 1440)
           expect((await files(page).first().boundingBox())!.y).toBeLessThan(
             900,
@@ -230,7 +240,23 @@ test("real upload, organization, project links, folders, trash, restore and samp
   ).toHaveCount(0);
   await profile(page, "system-administrator");
   await page.getByText("Datos de ejemplo", { exact: true }).click();
+  const resetResponsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.request().url().includes("/file"),
+  );
   await page.getByRole("button", { name: "Restablecer ejemplos" }).click();
+  const resetResponse = await resetResponsePromise;
+  if (![202, 303].includes(resetResponse.status()))
+    throw new Error(
+      `Sample reset failed (${resetResponse.status()}): ${await resetResponse.text()}`,
+    );
+  await page.waitForURL(
+    (url) =>
+      url.searchParams
+        .get("message")
+        ?.startsWith("Ejemplos restablecidos") ?? false,
+  );
   await expect(page.getByRole("status")).toContainText(
     "Ejemplos restablecidos",
   );
@@ -426,8 +452,15 @@ test("keyboard-only folder navigation, selection, view switching and focus retur
   await tabUntil(".library-back");
   await page.keyboard.press("Enter");
   await expect(page.locator(".library-results > header h2")).toBeFocused();
-  await page.keyboard.press("Shift+Tab");
-  await page.keyboard.press("Shift+Tab");
+  let viewFocused = false;
+  for (let i = 0; i < 100; i++) {
+    await page.keyboard.press("Shift+Tab");
+    if (await page.locator('.library-toolbar nav a[href*="view=grid"]').evaluate((node) => node === document.activeElement)) {
+      viewFocused = true;
+      break;
+    }
+  }
+  expect(viewFocused).toBe(true);
   await expect(page.locator('.library-toolbar nav a[href*="view=grid"]')).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/view=grid/);

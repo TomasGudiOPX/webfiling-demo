@@ -2,6 +2,7 @@ import { index, route, type RouteConfig } from "@react-router/dev/routes";
 
 export default [
   index("routes/home.ts"),
+  route("settings/calendar", "routes/calendar-settings.tsx"),
   route("file", "routes/library.tsx"),
   route("file/:projectSlug", "routes/library.project.tsx"),
   route("file/:projectSlug/search", "routes/file.$projectSlug.search.tsx"),

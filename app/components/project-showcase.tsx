@@ -2,14 +2,14 @@ import { Form, Link, useLoaderData, useLocation } from "react-router";
 import type { browserModel } from "../.server/file-browser.server";
 import { DOCUMENT_CATEGORIES } from "../types";
 import { ShowcaseHeader } from "./showcase-header";
-import CollectionCalendar from "./collection-calendar";
+import DummyCalendar from "./dummy-calendar";
 import "../styles/showcase.css";
 
 export default function ProjectShowcase() {
   const model = useLoaderData<Awaited<ReturnType<typeof browserModel>>>();
   const searchParams = new URLSearchParams(useLocation().search);
   const panel = searchParams.get("panel");
-  const preservePanel = (target: string) => panel && ["agent", "calendar", "rules"].includes(panel)
+  const preservePanel = (target: string) => panel && ["agent", "calendar"].includes(panel)
     ? `${target}${target.includes("?") ? "&" : "?"}panel=${panel}`
     : target;
   return (
@@ -37,23 +37,18 @@ export default function ProjectShowcase() {
           </div>
         </div>
       </section>
-      <Form
-        action="/file"
-        method="get"
-        className="showcase-search"
-        role="search"
-      >
-        <input type="hidden" name="browse" value="1" />
-        {panel && ["agent", "calendar", "rules"].includes(panel) && <input type="hidden" name="panel" value={panel} />}
-        <label htmlFor="showcase-query">Buscar en mis archivos</label>
+      <Form action="/file" method="get" className="showcase-search showcase-agent-prompt">
+        <input type="hidden" name="panel" value="agent" />
+        <label htmlFor="showcase-query">¿Qué necesitas hacer? Pídeselo al agente</label>
         <div>
           <input
             id="showcase-query"
-            type="search"
-            name="q"
-            placeholder="Busca un plano, una foto o un documento…"
+            type="text"
+            name="intent"
+            placeholder="Ej.: Resumir los documentos de Costa Norte"
+            maxLength={500}
           />
-          <button className="button">Buscar</button>
+          <button className="button">Abrir agente</button>
         </div>
       </Form>
       <section
@@ -145,11 +140,8 @@ export default function ProjectShowcase() {
             ))}
         </div>
       </section>
-      <CollectionCalendar collections={model.collections} />
-      <p className="demo-marker">
-        DEMO · El perfil define los archivos y acciones disponibles. Los
-        originales del servidor permanecen protegidos.
-      </p>
+      {/* Original live calendar: <CollectionCalendar collections={model.collections} /> */}
+      <DummyCalendar />
     </main>
   );
 }

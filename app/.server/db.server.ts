@@ -1126,6 +1126,9 @@ export function getRelationGraph(
       kind: "file" as const,
       label: file.filename,
       status: file.status,
+      categoryId: file.categoryId,
+      disciplineTag: file.tags.discipline,
+      locationTag: file.tags.location,
     })),
     edges,
   };

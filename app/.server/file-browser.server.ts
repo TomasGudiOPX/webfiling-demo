@@ -207,7 +207,9 @@ export async function browserModel(
   const params = url.searchParams;
   const { filters, invalid } = parseSearchFilters(params);
   filters.status = "";
-  const all = params.get("searchScope") === "all" || filters.scope === "all";
+  const all =
+    !project &&
+    (params.get("searchScope") === "all" || filters.scope === "all");
   const collectionId = all ? "" : (params.get("collection") ?? "");
   if (collectionId && !collections.some((c) => c.id === collectionId))
     throw new FileInputError("Colección no disponible.", 404);
@@ -417,6 +419,12 @@ export async function browserModel(
       "SELECT from_file_id AS 'from',to_file_id AS 'to',relation AS type FROM file_relations",
     )
     .all() as unknown as RelationFixture[];
+  const graphFiles = project
+    ? publicFiles.filter((file) =>
+        file.projects.some((p) => p.projectId === project.id),
+      )
+    : matching;
+  const graphFileIds = new Set(graphFiles.map((file) => file.id));
   const revisionFiles = publicFiles.map((f) => ({
     id: f.id,
     filename: f.displayName,
@@ -483,16 +491,17 @@ export async function browserModel(
     retired: params.has("status") || params.has("at") || params.has("retired"),
     files: matching,
     graph: {
-      nodes: matching.map((file) => ({
+      nodes: graphFiles.map((file) => ({
         id: file.id,
         kind: "file" as const,
         label: file.displayName,
         status: file.availability,
+        categoryId: file.organization.categoryId,
+        disciplineTag: file.organization.tags.discipline,
+        locationTag: file.organization.tags.location,
       })),
       edges: edges.filter(
-        (edge) =>
-          matching.some((file) => file.id === edge.from) &&
-          matching.some((file) => file.id === edge.to),
+        (edge) => graphFileIds.has(edge.from) && graphFileIds.has(edge.to),
       ),
     },
     count: matching.length,

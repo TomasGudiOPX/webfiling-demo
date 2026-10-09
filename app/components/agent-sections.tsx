@@ -3,7 +3,7 @@ import { Link, useLocation, useSearchParams } from "react-router";
 import { useLoaderData } from "react-router";
 import type { browserModel } from "../.server/file-browser.server";
 
-type Section = "agent" | "calendar" | "rules";
+type Section = "agent" | "settings";
 type Operation = { type: string; collectionId?: string; fileId?: string; fileIds?: string[]; recipientProfileId?: string; [key: string]: unknown };
 type Interpretation = { status: "ready" | "clarify" | "unsupported" | "forbidden"; explanation?: string; reason?: string; choices?: string[]; operation?: Operation };
 type Plan = { id: string; operation: Operation; reason: string; expiresAt: string };
@@ -13,9 +13,7 @@ type Notice = { id: string; notice_kind: string; collection_id: string; collecti
 type HistoryRun = { id: string; status: string; intent: string; createdAt: string; error?: { message: string } | null };
 type ApiData = { runs?: HistoryRun[]; schedules?: Schedule[]; rules?: Rule[]; notices?: Notice[]; worker?: { status: string; stale: boolean; heartbeatAt: string | null }; periods?: Array<{ id: string; status: string; missing: string[]; opensAt: string; closesAt: string; slots: Array<{ key: string; label: string; receivedCount: number }> }> };
 
-const sections: Array<{ id: Section; label: string }> = [
-  { id: "agent", label: "Agente" }, { id: "calendar", label: "Calendario" }, { id: "rules", label: "Reglas" },
-];
+const sections: Array<{ id: Section; label: string }> = [{ id: "agent", label: "Agente" }, { id: "settings", label: "Configuración · Calendario" }];
 
 async function jsonRequest<T>(url: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(url, { credentials: "same-origin", ...init });
@@ -69,7 +67,7 @@ export default function AgentSections({ active }: { active: Section | null }) {
     setData({});
     if (active === "agent") {
       void jsonRequest<ApiData>("/api/agent/runs").then((value) => { if (!cancelled) setData(value); }).catch((cause: unknown) => { if (!cancelled) setError(cause instanceof Error ? cause.message : "No se pudo cargar el historial."); });
-    } else if (active === "calendar" || active === "rules") {
+    } else if (active === "settings") {
       void Promise.all([
         jsonRequest<{ schedules: Schedule[] }>("/api/agent/schedules"),
         jsonRequest<{ notices: Notice[] }>("/api/agent/notices"),
@@ -84,13 +82,18 @@ export default function AgentSections({ active }: { active: Section | null }) {
   }, [active, runId, location.key]);
 
   useEffect(() => {
-    if (active !== "rules" || !collectionId) return;
+    const requestedIntent = searchParams.get("intent");
+    if (active === "agent" && requestedIntent) setIntentText(requestedIntent.slice(0, 500));
+  }, [active, searchKey]);
+
+  useEffect(() => {
+    if (active !== "settings" || !collectionId) return;
     void jsonRequest<{ periods: NonNullable<ApiData["periods"]> }>(`/api/agent/periods?collectionId=${encodeURIComponent(collectionId)}`)
       .then((value) => setPeriods(value.periods)).catch(() => setPeriods([]));
   }, [active, collectionId]);
 
   useEffect(() => {
-    if (!active) return;
+    if (active !== "agent") return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") closePanel();
     };
@@ -319,15 +322,14 @@ export default function AgentSections({ active }: { active: Section | null }) {
 
   return (
     <>
-      <nav className="agent-launcher" ref={navRef} aria-label="Herramientas secundarias">
+      {active !== "settings" && <nav className="agent-launcher" ref={navRef} aria-label="Herramientas secundarias">
         <span>Herramientas</span>
         <button type="button" aria-pressed={active === "agent"} onClick={() => selectSection("agent")}>Agente</button>
-        {model.profile === "system-administrator" && <Link to="?panel=rules">Configuración → Calendario</Link>}
-      </nav>
-      {active && <aside className="agent-panel" aria-label={`Panel ${active}`}>
+      </nav>}
+      {active && <div className={active === "settings" ? "calendar-settings-view" : "agent-panel"} aria-label={active === "settings" ? "Configuración del calendario" : `Panel ${active}`}>
         <header className="agent-panel-header">
-          <div><p className="eyebrow">WEBFILING / DEMO</p><h2 ref={panelTitleRef} tabIndex={-1}>{active === "rules" ? "Configuración · Calendario" : sections.find((section) => section.id === active)?.label}</h2></div>
-          <button type="button" className="agent-close" onClick={closePanel} aria-label="Cerrar panel">×</button>
+          <div><p className="eyebrow">WEBFILING / DEMO</p>{active === "settings" ? <h1 ref={panelTitleRef} tabIndex={-1}>Configuración · Calendario</h1> : <h2 ref={panelTitleRef} tabIndex={-1}>{sections.find((section) => section.id === active)?.label}</h2>}</div>
+          {active === "settings" ? <Link className="calendar-settings-back" to="/file">Volver a archivos</Link> : <button type="button" className="agent-close" onClick={closePanel} aria-label="Cerrar panel">×</button>}
         </header>
         {error && <p className="agent-error" role="alert">{error}</p>}
         {feedback && <p className="agent-note" role="status">{feedback}</p>}
@@ -351,7 +353,7 @@ export default function AgentSections({ active }: { active: Section | null }) {
           <form className="agent-intent-form" onSubmit={interpret}>
             <label htmlFor="agent-intent">¿Qué necesitás hacer?</label>
             <textarea id="agent-intent" value={intentText} maxLength={500} onChange={(event) => setIntentText(event.target.value)} placeholder="Ej.: Resumir un informe de Costa Norte" />
-            <div className="agent-form-footer"><span>{intentText.length}/500</span><button className="button" type="submit" disabled={!intentText.trim()}>Interpretar</button></div>
+            <div className="agent-form-footer"><span>{intentText.length}/500</span><div className="agent-input-actions"><button className="agent-voice-placeholder" type="button" disabled aria-label="Entrada por voz: próximamente" title="Próximamente"><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5m-4 0h8"/></svg></button><button className="button" type="submit" disabled={!intentText.trim()}>Interpretar</button></div></div>
           </form>
           {interpretation?.status === "unsupported" && <p className="agent-note" role="status">No reconozco esa solicitud. Probá una de las acciones guiadas.</p>}
           {interpretation?.status === "forbidden" && <p className="agent-note" role="status">La configuración del calendario requiere el perfil Administrador del sistema. Podés consultar tus fechas autorizadas desde el calendario principal.</p>}
@@ -360,9 +362,9 @@ export default function AgentSections({ active }: { active: Section | null }) {
           {plan && <div className="agent-card agent-plan-card"><strong>Plan para revisar</strong><p>{plan.reason}</p><p>Vence: {new Date(plan.expiresAt).toLocaleString("es-AR")}</p><button className="button" type="button" onClick={applyPlan} disabled={Boolean(runId) || isApplying}>{isApplying ? "Aplicando…" : "Aplicar una vez"}</button></div>}
           {runId && plan?.operation.type === "upload" && <form className="agent-upload-form" onSubmit={submitUpload}><label htmlFor="agent-plan-upload-file">Archivo para el plan</label><input id="agent-plan-upload-file" type="file" onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)} required /><button className="button" type="submit" disabled={!uploadFile || isUploading}>{isUploading ? "Cargando…" : "Confirmar y cargar"}</button></form>}
           {result !== null && <div className="agent-result" role="status"><strong>Resultado</strong>{(result as { id?: string; filename?: string }).id ? <article><p>{(result as { filename?: string }).filename}</p><Link to={`/file?browse=1&selected=${encodeURIComponent((result as { id: string }).id)}`}>Abrir archivo cargado</Link></article> : Array.isArray((result as { sources?: unknown[] }).sources) ? (result as { sources: Array<{ fileId: string; filename: string; summaryText: string; truncated: boolean }> }).sources.map((source) => <article key={source.fileId}><h3>{source.filename}</h3><p>{source.summaryText}</p>{source.truncated && <small>Extracto limitado.</small>}<Link to={`/file?browse=1&selected=${encodeURIComponent(source.fileId)}`}>Abrir fuente</Link></article>) : <pre>{JSON.stringify(result, null, 2)}</pre>}</div>}
-          <section className="agent-history"><h3>Historial reciente</h3>{data.runs?.slice(0, 5).map((run) => { let action = "acción"; try { action = (JSON.parse(run.intent) as Operation).type ?? action; } catch { action = "acción"; } return <article key={run.id}><p><strong>{run.status}</strong> · {action} · {new Date(run.createdAt).toLocaleString("es-AR")}</p>{run.error && <p>{run.error.message}</p>}{["failed", "partial"].includes(run.status) && <button type="button" onClick={() => retryRun(run)}>Preparar reintento</button>}</article>; })}</section>
+          <section className="agent-history"><h3>Historial reciente</h3><div className="agent-history-list">{data.runs?.slice(0, 5).map((run) => { let action = "acción"; try { action = (JSON.parse(run.intent) as Operation).type ?? action; } catch { action = "acción"; } return <article key={run.id}><p><strong>{run.status}</strong> · {action} · {new Date(run.createdAt).toLocaleString("es-AR")}</p>{run.error && <p>{run.error.message}</p>}{["failed", "partial"].includes(run.status) && <button type="button" onClick={() => retryRun(run)}>Preparar reintento</button>}</article>; })}<div className="agent-history-examples"><p className="agent-note">Actividad de ejemplo (datos ilustrativos).</p><article><p><strong>Completado</strong> · Resumen de Costa Norte · Hoy, 10:24</p><p>Resumen preparado con 3 documentos de la colección.</p></article><article><p><strong>Revisión</strong> · Faltantes de Costa Norte · Ayer, 16:40</p><p>Se identificaron 2 documentos pendientes de entrega.</p></article><article><p><strong>Completado</strong> · Organización de archivos · Ayer, 11:15</p><p>Plano estructural clasificado en la carpeta Planos.</p></article></div></div></section>
         </div>}
-        {(active === "calendar" || active === "rules") && <div className="agent-section-body">
+        {active === "settings" && <div className="agent-section-body">
           <p className="agent-note">Agenda compartida según tus permisos. Ejecución: {data.worker?.status ?? "cargando"}{data.worker?.heartbeatAt ? ` · latido ${new Date(data.worker.heartbeatAt).toLocaleTimeString("es-AR")}` : ""}</p>
           <form className="agent-rule-form" onSubmit={previewSchedule}><h3>Vista previa cron</h3><label>Expresión de cinco campos<input value={cronExpression} onChange={(event) => setCronExpression(event.target.value)} maxLength={100} required /></label><label>Zona IANA<input value={timezone} onChange={(event) => setTimezone(event.target.value)} maxLength={80} required /></label><button type="submit">Previsualizar próximas 3</button>{occurrences.map((date) => <p key={date}>{new Date(date).toLocaleString("es-AR", { timeZone: timezone })}</p>)}</form>
           <form className="agent-rule-form" onSubmit={createSchedule}><h3>Nueva programación</h3><label>Colección<select name="collectionId" required>{model.collections.filter((item) => item.capabilities.canRead).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Acción<select name="actionType"><option value="collection_check">Revisar faltantes</option><option value="collection_summary">Resumir colección</option></select></label><label>Tipo<select value={scheduleKind} onChange={(event) => setScheduleKind(event.target.value)}><option value="recurring">Recurrente</option><option value="once">Una vez</option></select></label>{scheduleKind === "once" && <label>Ejecutar el<input name="runAt" type="datetime-local" required /></label>}<button className="button" type="submit">Crear programación</button></form>
@@ -373,7 +375,7 @@ export default function AgentSections({ active }: { active: Section | null }) {
           {!data.notices?.length && <p className="agent-note">No hay avisos pendientes.</p>}
           {data.notices?.map((notice) => <article className="agent-list-card" key={notice.id}><strong>{notice.notice_kind === "overdue" ? "Vencido" : "Próximo a vencer"} · {notice.collection_name}</strong><p>Vence {new Date(notice.closes_at).toLocaleString("es-AR")}</p><code>{notice.missing_json}</code></article>)}
         </div>}
-        {active === "rules" && <div className="agent-section-body">
+        {active === "settings" && <div className="agent-section-body">
           <p className="agent-note">Configuración exclusiva del Administrador del sistema. Las reglas nuevas quedan deshabilitadas hasta habilitarlas explícitamente.</p>
           <form className="agent-rule-form" onSubmit={createRule}>
             <label>Colección<select name="collectionId" value={collectionId} onChange={(event) => setCollectionId(event.target.value)} required>{model.collections.filter((item) => item.capabilities.canRead).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
@@ -393,7 +395,7 @@ export default function AgentSections({ active }: { active: Section | null }) {
           <h3>Períodos y faltantes</h3>
           {periods?.map((period) => <article className="agent-list-card" key={period.id}><strong>Estado de recepción: {period.status}</strong><p>{new Date(period.opensAt).toLocaleDateString("es-AR")} — {new Date(period.closesAt).toLocaleDateString("es-AR")}</p><p>Faltan: {period.missing.join(", ") || "ninguno"}</p><ul>{period.slots.map((slot) => <li key={slot.key}>{slot.label}: {slot.receivedCount}</li>)}</ul><form onSubmit={(event) => linkEvidence(event, period.id)}><label>Archivo gestionado ID<input name="fileId" required /></label><label>Espacio<select name="slotKey">{period.slots.map((slot) => <option key={slot.key} value={slot.key}>{slot.label}</option>)}</select></label><button type="submit">Vincular recepción existente</button></form>{!['cancelled', 'superseded'].includes(period.status) && <form onSubmit={(event) => cancelPeriod(event, period.id)}><label>Motivo de cancelación<input name="reason" minLength={3} maxLength={500} required /></label><button type="submit">Cancelar período</button></form>}</article>)}
         </div>}
-      </aside>}
+      </div>}
     </>
   );
 }

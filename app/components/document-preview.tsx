@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import * as mammoth from "mammoth/mammoth.browser";
 import { renderMarkdown } from "./markdown";
 import type { PreviewDescriptor } from "../types";
 
-type Props = { fileId: string; preview: PreviewDescriptor };
+type Props = { fileId: string; preview: PreviewDescriptor; details?: ReactNode; downloadUrl?: string };
 const source = (fileId: string) =>
   `/api/files/${encodeURIComponent(fileId)}/preview`;
 
@@ -122,10 +122,10 @@ function PreviewContent({
   );
 }
 
-export function DocumentPreview({ fileId, preview }: Props) {
+export function DocumentPreview({ fileId, preview, details, downloadUrl }: Props) {
   const [expanded, setExpanded] = useState(false);
   const url = source(fileId);
-  const canExpand = preview.kind !== "unavailable";
+  const canExpand = preview.kind !== "unavailable" || Boolean(details);
 
   useEffect(() => {
     if (!expanded) return;
@@ -138,11 +138,36 @@ export function DocumentPreview({ fileId, preview }: Props) {
 
   return (
     <>
-      {canExpand && (
-        <div className="preview-actions">
-          <button type="button" onClick={() => setExpanded(true)}>
-            Ampliar vista
-          </button>
+      {(canExpand || downloadUrl) && (
+        <div
+          className="preview-actions"
+          role="group"
+          aria-label="Acciones del archivo"
+        >
+          {downloadUrl && (
+            <a
+              className="preview-download"
+              href={downloadUrl}
+              aria-label="Descargar archivo"
+              title="Descargar archivo"
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
+              </svg>
+            </a>
+          )}
+          {canExpand && (
+            <button
+              type="button"
+              aria-label="Ampliar vista"
+              title="Ampliar vista"
+              onClick={() => setExpanded(true)}
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
+              </svg>
+            </button>
+          )}
         </div>
       )}
       <PreviewContent key={url} url={url} preview={preview} />
@@ -169,8 +194,11 @@ export function DocumentPreview({ fileId, preview }: Props) {
                 Cerrar
               </button>
             </header>
-            <div className="preview-dialog-content">
-              <PreviewContent url={url} preview={preview} />
+            <div className={`preview-dialog-content ${details ? "has-details" : ""}`}>
+              {details && <div className="preview-dialog-details">{details}</div>}
+              <div className="preview-dialog-document">
+                <PreviewContent url={url} preview={preview} />
+              </div>
             </div>
           </section>
         </div>

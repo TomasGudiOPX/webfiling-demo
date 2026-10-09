@@ -16,6 +16,10 @@ test("panel-only URL keeps the showcase, supports keyboard close, and fits mobil
   await expect(page.locator(".restored-showcase")).toBeVisible();
   await expect(page.locator(".library-shell")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Agente", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Entrada por voz: próximamente" })).toBeDisabled();
+  await expect(page.getByText("Actividad de ejemplo (datos ilustrativos).")).toBeVisible();
+  await expect(page.locator(".agent-history-list")).toHaveCSS("max-height", "240px");
+  await expect(page.locator(".agent-history-list")).toHaveCSS("overflow-y", "auto");
   await page.screenshot({ path: "test-results/agent-panel-390.png", fullPage: true });
   const sizes = await page.evaluate(() => ({ width: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth }));
   expect(sizes.scrollWidth).toBeLessThanOrEqual(sizes.width);
@@ -33,6 +37,7 @@ test("opening and closing a panel preserves browser filters and selection", asyn
   await page.screenshot({ path: "test-results/agent-panel-1440-before.png", fullPage: true });
   await page.getByRole("button", { name: "Agente" }).first().click();
   await expect(page.locator(".agent-panel")).toBeVisible();
+  expect(await page.locator(".agent-panel").evaluate((panel) => panel.getBoundingClientRect().width)).toBeGreaterThan(430);
   await expect(page.getByRole("tab")).toHaveCount(0);
   await page.screenshot({ path: "test-results/agent-panel-1440.png", fullPage: true });
   await page.goBack();
@@ -87,13 +92,51 @@ test("the main delivery calendar stays visible on project views for all four pro
   }
 });
 
+test("main file view displays the sample calendar instead of live collection dates", async ({ page }) => {
+  await page.goto("/file");
+  await expect(page.getByRole("heading", { name: "Calendario de entregas" })).toBeVisible();
+  await expect(page.getByText("Datos de ejemplo")).toBeVisible();
+  await expect(page.getByRole("list", { name: "Entregas de ejemplo" }).getByText("Entrega de planos")).toBeVisible();
+  await expect(page.getByText("No hay entregas programadas para tus colecciones accesibles.")).toHaveCount(0);
+  await page.getByLabel("¿Qué necesitas hacer? Pídeselo al agente").fill("Resumir los documentos de Costa Norte");
+  await page.getByRole("button", { name: "Abrir agente" }).click();
+  await expect(page).toHaveURL(/panel=agent.*intent=/);
+  await expect(page.getByLabel("¿Qué necesitás hacer?")).toHaveValue("Resumir los documentos de Costa Norte");
+});
+
 test("calendar settings are reachable only to the system administrator; legacy rules links fail safely", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   await useProfile(page, "system-administrator");
-  await expect(page.getByRole("link", { name: "Configuración → Calendario" })).toBeVisible();
+  await page.goto("/file?browse=1");
+  await expect(page.locator(".showcase-topbar a[href='/settings/calendar']")).toBeVisible();
+  await page.getByRole("link", { name: "Configuración del calendario" }).click();
+  await expect(page).toHaveURL(/\/settings\/calendar$/);
+  await expect(page.getByRole("heading", { name: "Configuración · Calendario" })).toBeVisible();
+  await expect(page.getByLabel("Destinatario autorizado")).toBeVisible();
+  await expect(page.locator(".calendar-settings-view")).toBeVisible();
+  await expect(page.locator(".agent-panel")).toHaveCount(0);
+  await page.goBack();
+  await expect(page).toHaveURL(/\/file\?browse=1$/);
+  await page.goto("/file/costa-norte");
+  await expect(page.locator(".showcase-topbar a[href='/settings/calendar']")).toBeVisible();
+  const controlPositions = await page.evaluate(() => [
+    document.querySelector(".showcase-topbar .back-link")!.getBoundingClientRect().x,
+    document.querySelector(".showcase-profile select")!.getBoundingClientRect().x,
+    document.querySelector(".showcase-topbar .settings-nav-link")!.getBoundingClientRect().x,
+    document.querySelector(".theme-toggle")!.getBoundingClientRect().x,
+  ]);
+  expect(controlPositions[0]).toBeLessThan(controlPositions[1]);
+  expect(controlPositions[1]).toBeLessThan(controlPositions[2]);
+  expect(controlPositions[2]).toBeLessThan(controlPositions[3]);
   await page.goto("/file?panel=rules");
+  await expect(page).toHaveURL(/\/settings\/calendar$/);
   await expect(page.getByRole("heading", { name: "Configuración · Calendario" })).toBeVisible();
   await expect(page.getByLabel("Destinatario autorizado")).toBeVisible();
   await useProfile(page, "manager");
+  await expect(page.locator(".showcase-topbar a[href='/settings/calendar']")).toHaveCount(0);
+  await page.goto("/settings/calendar");
+  await expect(page).toHaveURL(/\/file\?settingsDenied=1$/);
+  await expect(page.getByRole("heading", { name: "Configuración · Calendario" })).toHaveCount(0);
   await page.goto("/file?panel=rules");
   await expect(page.getByText(/disponible solo para Administrador del sistema/)).toBeVisible();
   await expect(page.locator(".agent-panel")).toHaveCount(0);

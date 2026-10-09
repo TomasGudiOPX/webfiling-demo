@@ -10,6 +10,60 @@ import {
   STATUS_LABELS,
 } from "./relation-scene";
 
+type BrainGraph = Omit<RelationGraphData, "edges"> & {
+  edges: Array<{ from: string; to: string; type: string }>;
+};
+
+const CONTEXT_LINKS = [
+  { key: "disciplineTag", type: "same discipline", priority: 3 },
+  { key: "locationTag", type: "same location", priority: 2 },
+  { key: "categoryId", type: "same category", priority: 1 },
+] as const;
+
+function connectContext(graph: RelationGraphData): BrainGraph {
+  const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  const edges = new Map<
+    string,
+    { from: string; to: string; type: string; priority: number }
+  >();
+  const pairKey = (from: string, to: string) =>
+    JSON.stringify([from, to].sort());
+
+  for (const edge of graph.edges) {
+    if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) continue;
+    edges.set(pairKey(edge.from, edge.to), { ...edge, priority: 4 });
+  }
+
+  for (const rule of CONTEXT_LINKS) {
+    const groups = new Map<string, string[]>();
+    for (const node of graph.nodes) {
+      const value = node[rule.key];
+      if (!value) continue;
+      const group = groups.get(value);
+      if (group) group.push(node.id);
+      else groups.set(value, [node.id]);
+    }
+
+    for (const ids of groups.values()) {
+      ids.sort();
+      for (let index = 1; index < ids.length; index++) {
+        const from = ids[index - 1];
+        const to = ids[index];
+        const key = pairKey(from, to);
+        const existing = edges.get(key);
+        if (!existing || existing.priority < rule.priority) {
+          edges.set(key, { from, to, type: rule.type, priority: rule.priority });
+        }
+      }
+    }
+  }
+
+  return {
+    nodes: graph.nodes,
+    edges: [...edges.values()].map(({ from, to, type }) => ({ from, to, type })),
+  };
+}
+
 export function RelationGraph({
   graph,
   selectedId,
@@ -44,20 +98,30 @@ export function RelationGraph({
   };
 
   const activate = (nodeId: string) => {
+    const scrollY = typeof window !== "undefined" ? window.scrollY : 0;
+    const scrollX = typeof window !== "undefined" ? window.scrollX : 0;
     onSelect?.();
-    navigate(linkFor(nodeId), { preventScrollReset: true });
+    navigate(linkFor(nodeId), { preventScrollReset: true, replace: true });
+    if (typeof window !== "undefined") {
+      requestAnimationFrame(() => {
+        if (window.scrollY !== scrollY) {
+          window.scrollTo(scrollX, scrollY);
+        }
+      });
+    }
   };
   const activateRef = useRef(activate);
   activateRef.current = activate;
 
+  const brainGraph = useMemo(() => connectContext(graph), [graph]);
   const graphKey = useMemo(
     () =>
-      JSON.stringify(graph.nodes) +
+      JSON.stringify(brainGraph.nodes) +
       "::" +
-      graph.edges
+      brainGraph.edges
         .map((edge) => `${edge.from}->${edge.to}:${edge.type}`)
         .join("|"),
-    [graph],
+    [brainGraph],
   );
 
   useEffect(() => {
@@ -65,7 +129,7 @@ export function RelationGraph({
     if (!canvas) return;
     const scene = new RelationScene(
       canvas,
-      graph,
+      brainGraph,
       () => ({
         selectedId: selectedRef.current ?? null,
         paused: pausedRef.current,
@@ -83,9 +147,10 @@ export function RelationGraph({
     sceneRef.current?.refresh();
   }, [selectedId, paused]);
 
+  const visibleEdges = brainGraph.edges;
   const relationTypes = useMemo(
-    () => [...new Set(graph.edges.map((edge) => edge.type))],
-    [graph],
+    () => [...new Set(visibleEdges.map((edge) => edge.type))],
+    [visibleEdges],
   );
   const statuses = useMemo(
     () => [...new Set(graph.nodes.map((node) => node.status))],
@@ -96,8 +161,11 @@ export function RelationGraph({
     <div className="relation-graph brain-graph" data-testid="relation-graph">
       <div className="brain-heading">
         <div>
-          <span className="brain-kicker">RED DOCUMENTAL</span>
-          <p>Los archivos, conectados</p>
+          <span className="brain-kicker">RED DE CONOCIMIENTO</span>
+          <p>Vínculos que responden al cursor</p>
+          <span className="brain-summary">
+            {graph.nodes.length} archivos · {visibleEdges.length} vínculos
+          </span>
         </div>
         <button
           type="button"
@@ -112,12 +180,12 @@ export function RelationGraph({
           ref={canvasRef}
           className="relation-canvas"
           role="img"
-          aria-label="Mapa cerebral de relaciones entre archivos. Seleccioná un punto naranja o un archivo en la lista para abrirlo."
+          aria-label={`Red de conocimiento con ${graph.nodes.length} archivos y ${visibleEdges.length} vínculos. Seleccioná un nodo para abrirlo; al enfocarlo se iluminan sus conexiones.`}
         />
       </div>
       <p className="brain-hint">
-        Puntos naranjas: archivos. Líneas destacadas: vínculos registrados. La
-        malla tenue ilustra la forma del cerebro.
+        Pasá el cursor por un nodo para activar sus conexiones; hacé clic para
+        abrir el archivo. Arrastrá nodos para explorar la red.
       </p>
 
       <svg width="0" height="0" aria-hidden="true" className="relation-defs">
@@ -145,6 +213,7 @@ export function RelationGraph({
             <Link
               to={linkFor(node.id)}
               preventScrollReset
+              replace
               onClick={onSelect}
               aria-label={`${node.label}, ${STATUS_LABELS[node.status] ?? node.status}`}
               aria-current={node.id === selectedId ? "true" : undefined}
@@ -156,6 +225,12 @@ export function RelationGraph({
       </ul>
 
       <div className="graph-legend" aria-label="Leyenda del mapa de relaciones">
+        <span className="legend-item">
+          <svg width="34" height="10" aria-hidden="true">
+            <line x1="1" y1="5" x2="33" y2="5" stroke="#73d8c0" strokeWidth="2" />
+          </svg>
+          actividad de red
+        </span>
         {relationTypes.map((type) => {
           const style = RELATION_STYLES[type] ?? {
             color: "var(--muted)",

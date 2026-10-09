@@ -235,6 +235,158 @@ function Edit({ file, model }: { file: BrowserFile; model: Model }) {
   );
 }
 
+type FileDetailsProps = {
+  current: BrowserFile;
+  model: Model;
+  compare: string;
+  setCompare: (value: string) => void;
+  href: (values: Record<string, string | null>, root?: boolean) => string;
+  withActivePanel: (target: string) => string;
+};
+
+function FileDetails({
+  current,
+  model,
+  compare,
+  setCompare,
+  href,
+  withActivePanel,
+}: FileDetailsProps) {
+  return (
+    <details className="library-full-details" open>
+      <summary>Detalles del archivo</summary>
+      <dl>
+        <dt>Colección</dt>
+        <dd>{current.collectionName}</dd>
+        <dt>Ubicación</dt>
+        <dd>{current.location}</dd>
+        <dt>Nombre original</dt>
+        <dd>{current.filename}</dd>
+        <dt>Disponibilidad</dt>
+        <dd>
+          {current.availability === "available"
+            ? "Contenido disponible"
+            : "Contenido no disponible"}
+        </dd>
+      </dl>
+      {current.organization.tags.discipline && (
+        <span className="library-tag">
+          {DISCIPLINE_TAGS[current.organization.tags.discipline]}
+        </span>
+      )}
+      {current.organization.tags.location && (
+        <span className="library-tag">
+          {LOCATION_TAGS[current.organization.tags.location]}
+        </span>
+      )}
+      <h3>Proyectos vinculados</h3>
+      {current.projects.length ? (
+        current.projects.map((p) => (
+          <p key={p.projectId}>
+            <Link
+              to={withActivePanel(`/file/${model.projects.find((project) => project.id === p.projectId)?.slug}?selected=${current.id}`)}
+            >
+              {model.projects.find((project) => project.id === p.projectId)?.name}
+            </Link>
+          </p>
+        ))
+      ) : (
+        <p>Sin proyecto asociado.</p>
+      )}
+      {!model.trash && (
+        <>
+          <h3>
+            {model.latestId ? "Versiones registradas" : "Versiones disponibles"}
+          </h3>
+          {model.versions.length > 1 ? (
+            model.versions.map((file) => (
+              <p key={file.id}>
+                <Link to={href({ selected: file.id })}>{file.name}</Link>
+                {file.id === model.latestId && (
+                  <small> · Última versión registrada</small>
+                )}
+              </p>
+            ))
+          ) : (
+            <p>Sin otras versiones vinculadas.</p>
+          )}
+          {current.versions.supersedes.length > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() =>
+                  setCompare(compare ? "" : current.versions.supersedes[0])
+                }
+              >
+                {compare
+                  ? "Cerrar comparación"
+                  : "Comparar con versión anterior"}
+              </button>
+              {compare && (
+                <section>
+                  <h4>Versión anterior vinculada</h4>
+                  <DocumentPreview
+                    fileId={compare}
+                    preview={{
+                      kind: current.preview?.kind ?? "unavailable",
+                      title: "Versión anterior",
+                    }}
+                  />
+                </section>
+              )}
+            </>
+          )}
+          <h3>Archivos relacionados</h3>
+          {model.related.length ? (
+            model.related.map((file) => (
+              <p key={file.id}>
+                <Link to={href({ selected: file.id })}>{file.name}</Link>
+                <small> · {file.label}</small>
+              </p>
+            ))
+          ) : (
+            <p>Sin vínculos registrados.</p>
+          )}
+          {current.capabilities.canEdit && <Edit file={current} model={model} />}
+        </>
+      )}
+      {current.capabilities.canEdit &&
+        current.origin === "managed_upload" && (
+          <Form method="post" encType="multipart/form-data">
+            <input type="hidden" name="fileId" value={current.id} />
+            <input
+              type="hidden"
+              name="intent"
+              value={model.trash ? "restore" : "trash"}
+            />
+            <button>
+              {model.trash ? "Restaurar archivo" : "Enviar a papelera"}
+            </button>
+          </Form>
+        )}
+      <details className="library-activity">
+        <summary>Actividad del archivo</summary>
+        {model.activity.length ? (
+          <ol>
+            {model.activity.map((event) => (
+              <li key={event.id}>
+                <strong>{events[event.eventType] ?? "Archivo actualizado"}</strong>
+                <small>
+                  {profiles[event.actorId as keyof typeof profiles] ??
+                    event.actorId}{" "}
+                  · {new Date(event.occurredAt).toLocaleString("es-AR")}
+                </small>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p>Sin actividad de archivo registrada.</p>
+        )}
+      </details>
+    </details>
+  );
+}
+
 export default function FileLibrary() {
   const model = useLoaderData<Model>();
   const action = useActionData<{ error?: string }>();
@@ -244,15 +396,25 @@ export default function FileLibrary() {
   const detail = useRef<HTMLHeadingElement>(null);
   const previousSelection = useRef(model.selected?.id);
   const [compare, setCompare] = useState("");
+  const [filePage, setFilePage] = useState(0);
+  const [managerExpanded, setManagerExpanded] = useState(false);
   useEffect(() => {
     if (previousSelection.current !== model.selected?.id) {
-      if (model.selected) detail.current?.focus();
-      else results.current?.focus();
+      if (model.selected) detail.current?.focus({ preventScroll: true });
+      else results.current?.focus({ preventScroll: true });
       previousSelection.current = model.selected?.id;
     }
     setCompare("");
     setUpload(false);
   }, [model.selected?.id, model.profile]);
+  useEffect(() => {
+    if (!managerExpanded) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setManagerExpanded(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [managerExpanded]);
   const href = (values: Record<string, string | null>, root = false) => {
     const params = new URLSearchParams(location.search);
     params.set("browse", "1");
@@ -269,6 +431,12 @@ export default function FileLibrary() {
     return `${target}${target.includes("?") ? "&" : "?"}panel=${panel}`;
   };
   const current = model.selected;
+  const pageSize = 20;
+  const pageCount = Math.max(1, Math.ceil(model.files.length / pageSize));
+  const visiblePage = Math.min(filePage, pageCount - 1);
+  const visibleFiles = !model.trash
+    ? model.files.slice(visiblePage * pageSize, visiblePage * pageSize + pageSize)
+    : model.files;
   const selectedCollection = model.collections.find(
     (c) => c.id === model.collectionId,
   );
@@ -287,79 +455,92 @@ export default function FileLibrary() {
   }
   return (
     <main
-      className={`shell workspace-shell library-shell showcase-workspace ${current ? "has-selection" : ""}`}
+      className={`shell workspace-shell library-shell showcase-workspace ${model.project ? "has-project" : ""} ${!model.trash ? "compact-file-workspace" : ""} ${current ? "has-selection" : ""}`}
     >
       <ShowcaseHeader profile={model.profile} workspace />
       <div className="library-layout">
         <nav className="library-sidebar" aria-label="Colecciones y proyectos">
-          <Link
-            to={href({ selected: null, evidence: null }, true)}
-            className={
-              !model.collectionId && !model.project && !model.trash
-                ? "active"
-                : ""
-            }
-          >
-            Todos los archivos
-          </Link>
-          <h2>Colecciones</h2>
-          {model.collections.map((c) => (
+          <div className="library-sidebar-group">
+            <span className="library-sidebar-label">ARCHIVO</span>
             <Link
-              key={c.id}
+              to={href({ selected: null, evidence: null }, true)}
+              className={
+                !model.collectionId && !model.project && !model.trash
+                  ? "active"
+                  : ""
+              }
+            >
+              Todos los archivos
+            </Link>
+            <Link
               to={href(
-                {
-                  collection: c.id,
-                  folder: null,
-                  selected: null,
-                  evidence: null,
-                  searchScope: null,
-                  scope: null,
-                  trash: null,
-                },
+                { trash: "1", selected: null, evidence: null, folder: null },
                 true,
               )}
-              className={c.id === model.collectionId ? "active" : ""}
+              className={model.trash ? "active" : ""}
             >
-              {c.name}
-              <small>
-                {c.capabilities.canOrganize
-                  ? "Organizar"
-                  : c.capabilities.canContribute
-                    ? "Aportar archivos"
-                    : "Solo lectura"}
-              </small>
+              Papelera
             </Link>
-          ))}
-          <details>
-            <summary>Proyectos vinculados</summary>
-            {model.projects.map((p) => (
-              <Link key={p.id} to={withActivePanel(`/file/${p.slug}`)}>
-                {p.name}
+          </div>
+          <div className="library-sidebar-group">
+            <span className="library-sidebar-label">COLECCIONES</span>
+            {model.collections.map((c) => (
+              <Link
+                key={c.id}
+                to={href(
+                  {
+                    collection: c.id,
+                    folder: null,
+                    selected: null,
+                    evidence: null,
+                    searchScope: null,
+                    scope: null,
+                    trash: null,
+                  },
+                  true,
+                )}
+                className={c.id === model.collectionId ? "active" : ""}
+              >
+                {c.name}
+                <small>
+                  {c.capabilities.canOrganize
+                    ? "Organizar"
+                    : c.capabilities.canContribute
+                      ? "Aportar archivos"
+                      : "Solo lectura"}
+                </small>
               </Link>
             ))}
+          </div>
+          <details className="library-sidebar-group library-sidebar-projects">
+            <summary>
+              Proyectos vinculados <span>{model.projects.length}</span>
+            </summary>
+            <div className="library-sidebar-links">
+              {model.projects.map((p) => (
+                <Link
+                  key={p.id}
+                  to={withActivePanel(`/file/${p.slug}`)}
+                  className={p.id === model.project?.id ? "active" : ""}
+                >
+                  {p.name}
+                </Link>
+              ))}
+            </div>
           </details>
-          <Link
-            to={href(
-              { trash: "1", selected: null, evidence: null, folder: null },
-              true,
+          <div className="library-sidebar-group library-demo-group">
+            <span className="library-sidebar-label">PRUEBA · MUESTRA</span>
+            {model.profile === "system-administrator" && (
+              <details>
+                <summary>Datos de ejemplo</summary>
+                <p>Restablecer ejemplos conserva las cargas reales.</p>
+                <Form method="post" encType="multipart/form-data">
+                  <input type="hidden" name="intent" value="reset" />
+                  <button>Restablecer ejemplos</button>
+                </Form>
+              </details>
             )}
-          >
-            Papelera
-          </Link>
-          <p className="library-note">
-            Los archivos del servidor son de solo lectura. Las cargas se guardan
-            en almacenamiento de la demo.
-          </p>
-          {model.profile === "system-administrator" && (
-            <details>
-              <summary>Datos de ejemplo</summary>
-              <p>Restablecer ejemplos conserva las cargas reales.</p>
-              <Form method="post" encType="multipart/form-data">
-                <input type="hidden" name="intent" value="reset" />
-                <button>Restablecer ejemplos</button>
-              </Form>
-            </details>
-          )}
+          </div>
         </nav>
         <section className="library-main">
           <header className="library-title project-heading">
@@ -391,6 +572,21 @@ export default function FileLibrary() {
                 </button>
               )}
           </header>
+
+          {!model.trash && (
+            <details className="operations-brain showcase-map" open>
+              <summary>Cerebro de operaciones</summary>
+              <div className="panel relation-panel">
+                <RelationGraph
+                  graph={model.graph}
+                  selectedId={current?.id}
+                  projectSlug={model.project?.slug ?? model.projects[0]?.slug ?? "files"}
+                  preserve={model.filters}
+                  fileHref={(id) => href({ selected: id, evidence: null })}
+                />
+              </div>
+            </details>
+          )}
           {model.retired && (
             <div className="library-notice" role="status">
               Los filtros y enlaces del antiguo flujo ya no están disponibles.{" "}
@@ -408,197 +604,78 @@ export default function FileLibrary() {
             </p>
           )}
           {upload && <Upload model={model} close={() => setUpload(false)} />}
-          <Form
-            method="get"
-            className="library-search"
-            key={JSON.stringify(model.filters)}
-          >
-            <input type="hidden" name="browse" value="1" />
-            {new URLSearchParams(location.search).get("panel") && <input type="hidden" name="panel" value={new URLSearchParams(location.search).get("panel")!} />}
-            <input type="hidden" name="view" value={model.view} />
-            {model.collectionId && (
-              <input
-                type="hidden"
-                name="collection"
-                value={model.collectionId}
-              />
-            )}
-            {model.folderId && (
-              <input type="hidden" name="folder" value={model.folderId} />
-            )}
-            {model.trash && <input type="hidden" name="trash" value="1" />}
-            {current && (
-              <input type="hidden" name="selected" value={current.id} />
-            )}
-            <div className="library-search-line">
-              <label>
-                Buscar archivos
-                <input
-                  type="search"
-                  name="q"
-                  defaultValue={model.filters.query}
-                  placeholder="Nombre, contenido o ubicación…"
-                />
-              </label>
-              <button className="primary">Buscar</button>
-            </div>
-            <details className="library-filters">
-              <summary>
-                Filtros
-                {[
-                  model.filters.category,
-                  model.filters.discipline,
-                  model.filters.location,
-                  model.filters.type,
-                  model.filters.timeframe,
-                ].some(Boolean)
-                  ? " · activos"
-                  : ""}
-              </summary>
-              <div>
-                <Choice
-                  name="category"
-                  label="Categoría"
-                  value={model.filters.category}
-                  options={{
-                    unclassified: "Sin clasificar",
-                    ...Object.fromEntries(
-                      DOCUMENT_CATEGORIES.map((c) => [c.id, c.label]),
-                    ),
-                  }}
-                />
-                <Choice
-                  name="discipline"
-                  label="Disciplina"
-                  value={model.filters.discipline}
-                  options={DISCIPLINE_TAGS}
-                />
-                <Choice
-                  name="location"
-                  label="Ubicación temática"
-                  value={model.filters.location}
-                  options={LOCATION_TAGS}
-                />
-                <Choice
-                  name="type"
-                  label="Tipo documental"
-                  value={model.filters.type}
-                  options={Object.fromEntries(
-                    DOCUMENT_TYPE_IDS.map((id) => [id, id]),
-                  )}
-                />
-                <Choice
-                  name="timeframe"
-                  label="Modificado"
-                  value={model.filters.timeframe}
-                  options={{
-                    "7d": "Últimos 7 días",
-                    "30d": "Últimos 30 días",
-                    "90d": "Últimos 90 días",
-                    year: "Último año",
-                  }}
-                />
-                <label>
-                  Orden
-                  <select name="sort" defaultValue={model.filters.sort}>
-                    <option value="recent">Más recientes</option>
-                    <option value="oldest">Más antiguos</option>
-                    <option value="name">Nombre</option>
-                  </select>
-                </label>
-                <button>Aplicar filtros</button>
-              </div>
-            </details>
-          </Form>
-          <div className="library-toolbar">
-            <p>
-              {model.folder
-                ? "Esta carpeta y sus descendientes al buscar"
-                : model.project || selectedCollection
-                  ? "Dentro de esta selección"
-                  : "Todos los archivos accesibles"}{" "}
-              ·{" "}
-              <Link
-                to={href(
-                  {
-                    folder: null,
-                    collection: null,
-                    selected: null,
-                    evidence: null,
-                    searchScope: "all",
-                    scope: null,
-                  },
-                  true,
-                )}
-              >
-                Buscar en todos
-              </Link>
-            </p>
-            <nav aria-label="Vista de archivos">
-              {[
-                ["list", "Lista"],
-                ["grid", "Cuadrícula"],
-                ["folders", "Carpetas"],
-              ].map(([mode, label]) => (
-                <Link
-                  key={mode}
-                  to={href({ view: mode })}
-                  aria-current={model.view === mode ? "page" : undefined}
-                >
-                  {label}
-                </Link>
-              ))}
-            </nav>
-          </div>
+
           {model.invalid.length > 0 && (
             <p role="status">
               Algunos filtros no son válidos.{" "}
               <Link to="/file?browse=1">Restablecer filtros</Link>
             </p>
           )}
-          <nav className="library-breadcrumbs" aria-label="Ruta de carpetas">
-            <Link to={href({ folder: null, selected: null, evidence: null })}>
-              Raíz
-            </Link>
-            {breadcrumbs.map((f) => (
-              <span key={f.id}>
-                {" "}
-                /{" "}
-                <Link
-                  to={href({
-                    folder: f.id,
-                    collection: f.collectionId,
-                    searchScope: null,
-                    scope: null,
-                    selected: null,
-                    evidence: null,
-                  })}
-                >
-                  {f.name}
-                </Link>
-              </span>
-            ))}
-          </nav>
+          {breadcrumbs.length > 0 && (
+            <nav className="library-breadcrumbs" aria-label="Ruta de carpetas">
+              {breadcrumbs.map((f, index) => (
+                <span key={f.id}>
+                  {index > 0 && " / "}
+                  <Link
+                    to={href({
+                      folder: f.id,
+                      collection: f.collectionId,
+                      searchScope: null,
+                      scope: null,
+                      selected: null,
+                      evidence: null,
+                    })}
+                  >
+                    {f.name}
+                  </Link>
+                </span>
+              ))}
+            </nav>
+          )}
           <div className="library-content">
-            <section className="library-results" aria-label="Resultados">
+            {!model.trash && managerExpanded && (
+              <div
+                className="preview-backdrop"
+                role="presentation"
+                onMouseDown={() => setManagerExpanded(false)}
+              />
+            )}
+            <section
+              className={`library-results ${!model.trash ? "project-file-manager" : ""} ${managerExpanded ? "is-expanded preview-dialog" : ""}`}
+              aria-label={model.project ? "Archivos del proyecto" : "Administrador de archivos"}
+              role={managerExpanded ? "dialog" : undefined}
+              aria-modal={managerExpanded ? "true" : undefined}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
               <header>
                 <h2 ref={results} tabIndex={-1}>
-                  {model.count} archivos
+                  {model.project ? "Archivos del proyecto" : "Archivos"}
                 </h2>
-                <Link
-                  to={href({
-                    q: null,
-                    category: null,
-                    discipline: null,
-                    location: null,
-                    type: null,
-                    timeframe: null,
-                  })}
-                >
-                  Limpiar filtros
-                </Link>
+                <span className="project-file-count">{model.count} archivos</span>
+                {!model.trash && (
+                  <button
+                    type="button"
+                    className="file-manager-expand"
+                    aria-label={
+                      managerExpanded ? "Cerrar vista ampliada" : "Ampliar vista"
+                    }
+                    title={managerExpanded ? "Cerrar vista ampliada" : "Ampliar vista"}
+                    onClick={() => setManagerExpanded((expanded) => !expanded)}
+                    autoFocus={managerExpanded}
+                  >
+                    {managerExpanded ? (
+                      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                        <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" />
+                      </svg>
+                    ) : (
+                      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                        <path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
+                      </svg>
+                    )}
+                  </button>
+                )}
               </header>
-              {model.view === "folders" && (
+              {(model.trash || managerExpanded) && model.view === "folders" && (
                 <nav
                   className="library-folders"
                   aria-label="Carpetas disponibles"
@@ -631,7 +708,7 @@ export default function FileLibrary() {
                   ))}
                 </nav>
               )}
-              {selectedCollection?.capabilities.canOrganize && !model.trash && (
+              {model.trash && selectedCollection?.capabilities.canOrganize && (
                 <details className="library-new-folder">
                   <summary>Nueva carpeta</summary>
                   <Form method="post" encType="multipart/form-data">
@@ -688,8 +765,17 @@ export default function FileLibrary() {
                   </Link>
                 </div>
               )}
-              <div className={`library-files view-${model.view}`}>
-                {model.files.map((file) => (
+              <div
+                className={`library-files ${!model.trash && !managerExpanded ? "view-list" : `view-${model.view}`}`}
+                style={
+                  !model.trash && !managerExpanded
+                    ? {
+                        gridTemplateColumns: `repeat(${Math.max(1, Math.ceil(visibleFiles.length / 2))}, minmax(160px, 1fr))`,
+                      }
+                    : undefined
+                }
+              >
+                {visibleFiles.map((file) => (
                   <Link
                     data-file-id={file.id}
                     key={file.id}
@@ -724,29 +810,72 @@ export default function FileLibrary() {
                   </Link>
                 ))}
               </div>
-              {!model.trash && model.graph.nodes.length > 0 && (
-                <details className="advanced-map-disclosure showcase-map">
-                  <summary>Mapa de documentos y relaciones</summary>
-                  <div className="panel relation-panel">
-                    <div className="section-heading">
-                      <div>
-                        <p className="eyebrow">CONTEXTO Y VERSIONES</p>
-                        <h2>Mapa de documentos</h2>
-                      </div>
+              {!model.trash && (
+                <nav className="project-file-pagination" aria-label="Páginas de archivos">
+                  <button type="button" onClick={() => setFilePage((page) => Math.max(0, page - 1))} disabled={visiblePage === 0}>Anterior</button>
+                  <span>Página {visiblePage + 1} de {pageCount}</span>
+                  <button type="button" onClick={() => setFilePage((page) => Math.min(pageCount - 1, page + 1))} disabled={visiblePage >= pageCount - 1}>Siguiente</button>
+                </nav>
+              )}
+              {(model.trash || managerExpanded) && (
+              <details className="project-file-controls" open={!model.trash}>
+                <summary>Buscar / cambiar tipo de archivo</summary>
+                <Form method="get" className="project-file-search" key={JSON.stringify(model.filters)}>
+                  <input type="hidden" name="browse" value="1" />
+                  {new URLSearchParams(location.search).get("panel") && <input type="hidden" name="panel" value={new URLSearchParams(location.search).get("panel")!} />}
+                  <input type="hidden" name="view" value={model.view} />
+                  {model.collectionId && <input type="hidden" name="collection" value={model.collectionId} />}
+                  {model.folderId && <input type="hidden" name="folder" value={model.folderId} />}
+                  {model.trash && <input type="hidden" name="trash" value="1" />}
+                  {current && <input type="hidden" name="selected" value={current.id} />}
+                  {!model.trash && managerExpanded && (
+                    <nav className="project-file-views" aria-label="Tipo de vista">
+                      {([
+                        ["list", "Lista"],
+                        ["grid", "Cuadrícula"],
+                        ["folders", "Carpetas"],
+                      ] as const).map(([view, label]) => (
+                        <Link
+                          key={view}
+                          to={href({ view })}
+                          aria-current={model.view === view ? "page" : undefined}
+                        >
+                          {label}
+                        </Link>
+                      ))}
+                    </nav>
+                  )}
+                  <label>
+                    Buscar archivos
+                    <input type="search" name="q" defaultValue={model.filters.query} placeholder="Nombre, contenido o ubicación…" />
+                  </label>
+                  <Choice
+                    name="type"
+                    label="Tipo documental"
+                    value={model.filters.type}
+                    options={Object.fromEntries(DOCUMENT_TYPE_IDS.map((id) => [id, id]))}
+                  />
+                  <Choice
+                    name="category"
+                    label="Categoría"
+                    value={model.filters.category}
+                    options={{
+                      unclassified: "Sin clasificar",
+                      ...Object.fromEntries(DOCUMENT_CATEGORIES.map((c) => [c.id, c.label])),
+                    }}
+                  />
+                  <details className="library-filters project-advanced-filters">
+                    <summary>Filtros avanzados</summary>
+                    <div>
+                      <Choice name="discipline" label="Disciplina" value={model.filters.discipline} options={DISCIPLINE_TAGS} />
+                      <Choice name="location" label="Ubicación temática" value={model.filters.location} options={LOCATION_TAGS} />
+                      <Choice name="timeframe" label="Modificado" value={model.filters.timeframe} options={{ "7d": "Últimos 7 días", "30d": "Últimos 30 días", "90d": "Últimos 90 días", year: "Último año" }} />
+                      <label>Orden<select name="sort" defaultValue={model.filters.sort}><option value="recent">Más recientes</option><option value="oldest">Más antiguos</option><option value="name">Nombre</option></select></label>
                     </div>
-                    <RelationGraph
-                      graph={model.graph}
-                      selectedId={current?.id}
-                      projectSlug={model.project?.slug ?? ""}
-                      preserve={model.filters}
-                      fileHref={(id) => href({ selected: id, evidence: null })}
-                    />
-                    <p className="muted">
-                      El mapa muestra los archivos de esta búsqueda y sus
-                      vínculos registrados.
-                    </p>
-                  </div>
-                </details>
+                  </details>
+                  <button className="primary">Buscar</button>
+                </Form>
+              </details>
               )}
             </section>
             {!current && !model.trash && (
@@ -775,12 +904,6 @@ export default function FileLibrary() {
                 aria-label="Detalles del archivo"
                 key={`${model.profile}:${current.id}`}
               >
-                <Link
-                  className="library-back"
-                  to={href({ selected: null, evidence: null })}
-                >
-                  ← Volver a resultados
-                </Link>
                 <h2 tabIndex={-1} ref={detail}>
                   {current.displayName}
                 </h2>
@@ -790,171 +913,61 @@ export default function FileLibrary() {
                     : current.origin === "managed_upload"
                       ? "Archivo cargado"
                       : current.origin === "fixture"
-                        ? "Archivo de ejemplo"
+                        ? ""
                         : "Sin contenido almacenado"}
                 </p>
                 {!model.trash && (
                   <>
-                    <a
-                      className="library-download"
-                      href={`/api/files/${current.id}/download`}
-                    >
-                      Descargar archivo
-                    </a>
                     {current.preview ? (
                       <DocumentPreview
                         fileId={current.id}
                         preview={current.preview}
-                      />
-                    ) : (
-                      <p>
-                        Este formato no tiene vista previa. Puede descargar el
-                        archivo.
-                      </p>
-                    )}
-                  </>
-                )}
-                <dl>
-                  <dt>Colección</dt>
-                  <dd>{current.collectionName}</dd>
-                  <dt>Ubicación</dt>
-                  <dd>{current.location}</dd>
-                  <dt>Nombre original</dt>
-                  <dd>{current.filename}</dd>
-                  <dt>Disponibilidad</dt>
-                  <dd>
-                    {current.availability === "available"
-                      ? "Contenido disponible"
-                      : "Contenido no disponible"}
-                  </dd>
-                </dl>
-                {current.organization.tags.discipline && (
-                  <span className="library-tag">
-                    {DISCIPLINE_TAGS[current.organization.tags.discipline]}
-                  </span>
-                )}
-                {current.organization.tags.location && (
-                  <span className="library-tag">
-                    {LOCATION_TAGS[current.organization.tags.location]}
-                  </span>
-                )}
-                <h3>Proyectos vinculados</h3>
-                {current.projects.length ? (
-                  current.projects.map((p) => (
-                    <p key={p.projectId}>
-                      <Link
-                        to={withActivePanel(`/file/${model.projects.find((project) => project.id === p.projectId)?.slug}?selected=${current.id}`)}
-                      >
-                        {
-                          model.projects.find(
-                            (project) => project.id === p.projectId,
-                          )?.name
+                        downloadUrl={`/api/files/${current.id}/download`}
+                        details={
+                          <FileDetails
+                            current={current}
+                            model={model}
+                            compare={compare}
+                            setCompare={setCompare}
+                            href={href}
+                            withActivePanel={withActivePanel}
+                          />
                         }
-                      </Link>
-                    </p>
-                  ))
-                ) : (
-                  <p>Sin proyecto asociado.</p>
-                )}
-                {!model.trash && (
-                  <>
-                    <h3>
-                      {model.latestId
-                        ? "Versiones registradas"
-                        : "Versiones disponibles"}
-                    </h3>
-                    {model.versions.length > 1 ? (
-                      model.versions.map((f) => (
-                        <p key={f.id}>
-                          <Link to={href({ selected: f.id })}>{f.name}</Link>
-                          {f.id === model.latestId && (
-                            <small> · Última versión registrada</small>
-                          )}
-                        </p>
-                      ))
+                      />
                     ) : (
-                      <p>Sin otras versiones vinculadas.</p>
-                    )}
-                    {current.versions.supersedes.length > 0 && (
-                      <>
-                        <button
-                          onClick={() =>
-                            setCompare(
-                              compare ? "" : current.versions.supersedes[0],
-                            )
-                          }
-                        >
-                          {compare
-                            ? "Cerrar comparación"
-                            : "Comparar con versión anterior"}
-                        </button>
-                        {compare && (
-                          <section>
-                            <h4>Versión anterior vinculada</h4>
-                            <DocumentPreview
-                              fileId={compare}
-                              preview={{
-                                kind: current.preview?.kind ?? "unavailable",
-                                title: "Versión anterior",
-                              }}
-                            />
-                          </section>
-                        )}
-                      </>
-                    )}
-                    <h3>Archivos relacionados</h3>
-                    {model.related.length ? (
-                      model.related.map((f) => (
-                        <p key={f.id}>
-                          <Link to={href({ selected: f.id })}>{f.name}</Link>
-                          <small> · {f.label}</small>
-                        </p>
-                      ))
-                    ) : (
-                      <p>Sin vínculos registrados.</p>
-                    )}
-                    {current.capabilities.canEdit && (
-                      <Edit file={current} model={model} />
+                      <DocumentPreview
+                        fileId={current.id}
+                        preview={{
+                          kind: "unavailable",
+                          title: current.displayName,
+                          reason: "Este formato no tiene vista previa. Puede descargar el archivo.",
+                        }}
+                        downloadUrl={`/api/files/${current.id}/download`}
+                        details={
+                          <FileDetails
+                            current={current}
+                            model={model}
+                            compare={compare}
+                            setCompare={setCompare}
+                            href={href}
+                            withActivePanel={withActivePanel}
+                          />
+                        }
+                      />
                     )}
                   </>
                 )}
-                {current.capabilities.canEdit &&
-                  current.origin === "managed_upload" && (
-                    <Form method="post" encType="multipart/form-data">
-                      <input type="hidden" name="fileId" value={current.id} />
-                      <input
-                        type="hidden"
-                        name="intent"
-                        value={model.trash ? "restore" : "trash"}
-                      />
-                      <button>
-                        {model.trash
-                          ? "Restaurar archivo"
-                          : "Enviar a papelera"}
-                      </button>
-                    </Form>
-                  )}
-                <details className="library-activity">
-                  <summary>Actividad del archivo</summary>
-                  {model.activity.length ? (
-                    <ol>
-                      {model.activity.map((e) => (
-                        <li key={e.id}>
-                          <strong>
-                            {events[e.eventType] ?? "Archivo actualizado"}
-                          </strong>
-                          <small>
-                            {profiles[e.actorId as keyof typeof profiles] ??
-                              e.actorId}{" "}
-                            · {new Date(e.occurredAt).toLocaleString("es-AR")}
-                          </small>
-                        </li>
-                      ))}
-                    </ol>
-                  ) : (
-                    <p>Sin actividad de archivo registrada.</p>
-                  )}
-                </details>
+
+                {model.trash && (
+                  <FileDetails
+                    current={current}
+                    model={model}
+                    compare={compare}
+                    setCompare={setCompare}
+                    href={href}
+                    withActivePanel={withActivePanel}
+                  />
+                )}
               </aside>
             )}
           </div>

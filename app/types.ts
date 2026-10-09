@@ -399,6 +399,9 @@ export interface RelationNode {
   kind: "file" | "project";
   label: string;
   status: string;
+  categoryId?: string | null;
+  disciplineTag?: string | null;
+  locationTag?: string | null;
 }
 
 export interface RelationGraph {

@@ -25,7 +25,7 @@ export default function App() {
       <body>
         <ThemeToggle />
         <Outlet />
-        <ScrollRestoration />
+        <ScrollRestoration getKey={(location) => location.pathname} />
         <Scripts />
       </body>
     </html>

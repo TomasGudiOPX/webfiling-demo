@@ -24,7 +24,7 @@ import {
 } from "../.server/reconstruction.server";
 import { getScenario, scenarioRegistry } from "../scenarios";
 import { parseSearchFilters, workspaceUrl } from "../search-filters";
-import { DISCIPLINE_TAGS, DOCUMENT_CATEGORIES, LOCATION_TAGS } from "../types";
+import { DOCUMENT_CATEGORIES } from "../types";
 import {
   groupDocumentRevisions,
   matchRevisionGroups,
@@ -307,19 +307,6 @@ const documentTypeLabels: Record<string, string> = {
   logistics: "Logística y materiales",
   hse: "Seguridad e higiene",
   procurement: "Proveedores y subcontratos",
-};
-
-const timeframeLabels: Record<string, string> = {
-  "7d": "Últimos 7 días",
-  "30d": "Últimos 30 días",
-  "90d": "Últimos 90 días",
-  year: "Último año",
-};
-
-const sortLabels: Record<string, string> = {
-  recent: "Más recientes",
-  oldest: "Más antiguos",
-  name: "Nombre A–Z",
 };
 
 const relationLabels: Record<string, string> = {
@@ -615,7 +602,6 @@ export default function Workspace({
     type,
     timeframe,
     sort,
-    invalidFilters,
     at,
     asOf,
     graph,
@@ -637,9 +623,12 @@ export default function Workspace({
     predecessorId: string;
   } | null>(null);
   const [rightOpen, setRightOpen] = useState(true);
+  const [filePage, setFilePage] = useState(0);
   const [rightPanel, setRightPanel] = useState<"evidence" | "actions">(
     "evidence",
   );
+  const filePageCount = Math.max(1, Math.ceil(revisionGroups.length / 4));
+  const visibleFilePage = Math.min(filePage, filePageCount - 1);
 
   const comparisonPredecessor =
     predecessors.length === 1
@@ -783,6 +772,17 @@ export default function Workspace({
         </span>
       </section>
 
+      <details className="operations-brain" open>
+        <summary>Cerebro de operaciones</summary>
+        <RelationGraph
+          graph={graph}
+          selectedId={selected?.id}
+          projectSlug={project.slug}
+          preserve={filters}
+          onSelect={() => setRightPanel("evidence")}
+        />
+      </details>
+
       {/* As-of reconstruction control */}
       <details className="asof-control" data-testid="asof-control">
         <summary>Ver a una fecha</summary>
@@ -918,206 +918,6 @@ export default function Workspace({
         ))}
       </nav>
 
-      {/* Search Toolbar & Fast Suggestion Chips */}
-      <section className="toolbar">
-        <Form method="get" className="search-form">
-          <div className="search-header">
-            <label htmlFor="q">Buscar documentos</label>
-            <span className="result-count">
-              {files.length} resultado{files.length === 1 ? "" : "s"}
-            </span>
-          </div>
-          <div className="search-input-group">
-            <div className="search-box">
-              <svg
-                className="search-icon"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                aria-hidden="true"
-              >
-                <circle
-                  cx="11"
-                  cy="11"
-                  r="7"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                />
-                <path
-                  d="m20 20-3.5-3.5"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                />
-              </svg>
-              <input
-                id="q"
-                name="q"
-                defaultValue={query}
-                placeholder={`ej. ${scenario.recommendedQuery}`}
-              />
-              {(query || status || type || timeframe || sort !== "recent") && (
-                <Link
-                  className="search-clear"
-                  aria-label="Limpiar filtros"
-                  to={`/file/${project.slug}`}
-                >
-                  ×
-                </Link>
-              )}
-            </div>
-            <details className="advanced-filter-disclosure">
-              <summary>Filtros avanzados{status || type || timeframe || sort !== "recent" || scope === "all" || filters.discipline || filters.location ? " · activos" : ""}</summary>
-              <div className="advanced-filter-controls">
-                <select name="scope" defaultValue={scope} aria-label="Alcance de búsqueda">
-                  <option value="project">Solo {project.name}</option>
-                  <option value="all">Todos los escenarios</option>
-                </select>
-                <select name="status" defaultValue={status} aria-label="Filtrar por estado">
-                  <option value="">Todos los estados</option>
-                  {Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-                <select name="type" defaultValue={type} aria-label="Filtrar por tipo de documento">
-                  <option value="">Todos los tipos</option>
-                  {Object.entries(documentTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-                <select name="discipline" defaultValue={filters.discipline} aria-label="Filtrar por disciplina">
-                  <option value="">Todas las disciplinas</option>
-                  {Object.entries(DISCIPLINE_TAGS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-                <select name="location" defaultValue={filters.location} aria-label="Filtrar por ubicación">
-                  <option value="">Todas las ubicaciones</option>
-                  {Object.entries(LOCATION_TAGS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-                <select name="timeframe" defaultValue={timeframe} aria-label="Filtrar por fecha de actualización">
-                  <option value="">Cualquier fecha</option>
-                  {Object.entries(timeframeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-                <select name="sort" defaultValue={sort} aria-label="Ordenar documentos">
-                  {Object.entries(sortLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-              </div>
-            </details>
-            <button className="button search-submit" type="submit">
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                aria-hidden="true"
-              >
-                <circle
-                  cx="11"
-                  cy="11"
-                  r="7"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                />
-                <path
-                  d="m20 20-3.5-3.5"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                />
-              </svg>
-              Buscar
-            </button>
-          </div>
-
-          {/* Quick Query Suggestion Chips */}
-          <div className="search-chips" aria-label="Consultas sugeridas">
-            <span className="chip-label">Consultas rápidas:</span>
-            {Array.from(
-              new Set([
-                scenario.recommendedQuery,
-                "plano vigente",
-                "contrato",
-                "memoria técnica",
-              ]),
-            ).map((chip) => (
-              <Link
-                key={chip}
-                className="search-chip"
-                to={workspaceUrl(project.slug, { ...filters, query: chip })}
-              >
-                {chip}
-              </Link>
-            ))}
-          </div>
-
-          <details className="timeframe-disclosure">
-          <summary>Períodos rápidos</summary>
-          <div className="search-chips timeframes" aria-label="Períodos rápidos">
-            <span className="chip-label">Actualizado:</span>
-            {[
-              ["", "Todo"],
-              ["7d", "7 días"],
-              ["30d", "30 días"],
-              ["90d", "90 días"],
-              ["year", "1 año"],
-            ].map(([value, label]) => (
-              <Link
-                key={value || "all"}
-                className={`search-chip ${timeframe === value ? "active" : ""}`}
-                to={workspaceUrl(project.slug, {
-                  ...filters,
-                  timeframe: value as typeof timeframe,
-                })}
-              >
-                {label}
-              </Link>
-            ))}
-          </div>
-          </details>
-
-          <small className="scope-note">
-            Alcance activo:{" "}
-            <strong>
-              {scope === "all" ? "todos los escenarios" : project.name}
-            </strong>
-            {status ? ` · ${labels[status] ?? status}` : ""}
-            {type ? ` · ${documentTypeLabels[type] ?? type}` : ""}
-            {filters.discipline ? ` · ${DISCIPLINE_TAGS[filters.discipline]}` : ""}
-            {filters.location ? ` · ${LOCATION_TAGS[filters.location]}` : ""}
-            {timeframe ? ` · ${timeframeLabels[timeframe]}` : ""}
-            {sort !== "recent" ? ` · ${sortLabels[sort]}` : ""}
-          </small>
-        </Form>
-        {invalidFilters.length > 0 && (
-          <p className="filter-warning" role="alert">
-            Se descartaron filtros no compatibles: {invalidFilters
-              .map(({ key, value }) => `${key}=${value}`)
-              .join(", ")}
-          </p>
-        )}
-        <nav className="category-navigation" aria-label="Categorías de documentos">
-          <Link
-            className={!filters.category ? "category-chip active" : "category-chip"}
-            aria-current={!filters.category ? "page" : undefined}
-            to={workspaceUrl(project.slug, { ...filters, category: "" })}
-          >
-            Todos <span>{Object.values(counts.categoryCounts).reduce((sum, count) => sum + count, 0)}</span>
-          </Link>
-          {DOCUMENT_CATEGORIES.map(({ id, label }) => (
-            <Link
-              className={filters.category === id ? "category-chip active" : "category-chip"}
-              aria-current={filters.category === id ? "page" : undefined}
-              key={id}
-              to={workspaceUrl(project.slug, { ...filters, category: id })}
-            >
-              {label} <span>{counts.categoryCounts[id] ?? 0}</span>
-            </Link>
-          ))}
-          <Link
-            className={filters.category === "unclassified" ? "category-chip active" : "category-chip"}
-            aria-current={filters.category === "unclassified" ? "page" : undefined}
-            to={workspaceUrl(project.slug, { ...filters, category: "unclassified" })}
-          >
-            Sin clasificar <span>{counts.categoryCounts.unclassified ?? 0}</span>
-          </Link>
-        </nav>
-      </section>
 
       {/* Workspace Main Grid */}
       <section
@@ -1163,7 +963,15 @@ export default function Workspace({
             </p>
           )}
 
-          {/* File List */}
+          {/* Compact file manager */}
+          <section className="file-manager" aria-label="Gestor de archivos">
+          <div className="file-manager-heading">
+            <div>
+              <p className="eyebrow">ARCHIVOS</p>
+              <h2>Documentos de la obra</h2>
+            </div>
+            <span className="badge-count">{files.length} archivos</span>
+          </div>
           {files.length === 0 ? (
             <div className="empty-state">
               <h3>No hay resultados todavía</h3>
@@ -1173,8 +981,10 @@ export default function Workspace({
               </p>
             </div>
           ) : (
-            <div className="file-list">
-              {revisionGroups.map(({ group, matchingFiles, representative }) => {
+            <>
+            <div className="file-carousel" aria-label="Archivos, desplazamiento horizontal">
+              <div className="file-list">
+              {revisionGroups.slice(visibleFilePage * 4, visibleFilePage * 4 + 4).map(({ group, matchingFiles, representative }) => {
                 const rows = matchingFiles.map((file) => (
                   <FileResultRow
                     key={file.id}
@@ -1205,95 +1015,61 @@ export default function Workspace({
                   </details>
                 );
               })}
+              </div>
             </div>
+            <nav className="file-pagination" aria-label="Páginas de archivos">
+              <button type="button" className="button sm" disabled={visibleFilePage === 0} onClick={() => setFilePage((page) => Math.max(0, page - 1))}>Anterior</button>
+              <span>Página {visibleFilePage + 1} de {filePageCount}</span>
+              <button type="button" className="button sm" disabled={visibleFilePage >= filePageCount - 1} onClick={() => setFilePage((page) => Math.min(filePageCount - 1, page + 1))}>Siguiente</button>
+            </nav>
+            </>
           )}
-
-          {/* Full relationship map is secondary; direct context remains in evidence. */}
-          <details className="advanced-map-disclosure">
-            <summary>Mapa completo de relaciones</summary>
-          <section className="lower-grid">
-            <div className="panel relation-panel">
-              <div className="section-heading">
-                <div>
-                  <p className="eyebrow">TRAZABILIDAD Y VERSIONES</p>
-                  <h2>Mapa de documentos</h2>
-                </div>
-              </div>
-
-              <RelationGraph
-                graph={graph}
-                selectedId={selected?.id}
-                projectSlug={project.slug}
-                preserve={filters}
-                onSelect={() => setRightPanel("evidence")}
-              />
-
-              <div
-                className="relation-list"
-                aria-label="Lista accesible de relaciones"
-              >
-                <h3 className="relation-list-title">
-                  Relaciones entre documentos
-                </h3>
-                {graph.edges.length ? (
-                  <ul className="relation-cards">
-                    {graph.edges.map((edge) => {
-                      const from = graph.nodes.find(
-                        (node) => node.id === edge.from,
-                      );
-                      const to = graph.nodes.find(
-                        (node) => node.id === edge.to,
-                      );
-                      const typeLabel = relationLabels[edge.type] ?? edge.type;
-                      return (
-                        <li
-                          className="relation-card"
-                          key={`${edge.from}-${edge.to}`}
-                        >
-                          <Link
-                            className="relation-doc"
-                            preventScrollReset
-                            to={workspaceUrl(project.slug, filters, edge.from)}
-                          >
-                            <span
-                              className={`relation-icon ext-${extOf(from?.label ?? "").toLowerCase()}`}
-                            >
-                              {extOf(from?.label ?? "")}
-                            </span>
-                            <span className="relation-filename">
-                              {from?.label}
-                            </span>
-                          </Link>
-                          <span
-                            className={`relation-type type-${edge.type.replaceAll(" ", "-")}`}
-                          >
-                            {typeLabel}
-                          </span>
-                          <Link
-                            className="relation-doc"
-                            preventScrollReset
-                            to={workspaceUrl(project.slug, filters, edge.to)}
-                          >
-                            <span
-                              className={`relation-icon ext-${extOf(to?.label ?? "").toLowerCase()}`}
-                            >
-                              {extOf(to?.label ?? "")}
-                            </span>
-                            <span className="relation-filename">
-                              {to?.label}
-                            </span>
-                          </Link>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                ) : (
-                  <p>No hay relaciones registradas.</p>
-                )}
-              </div>
-            </div>
-          </section>
+          <details className="manager-filter-disclosure">
+            <summary>Buscar / cambiar tipo de archivo</summary>
+            <Form method="get" className="manager-filter-form">
+              <input type="hidden" name="scope" value={scope} />
+              <input type="hidden" name="status" value={status} />
+              <input type="hidden" name="discipline" value={filters.discipline ?? ""} />
+              <input type="hidden" name="location" value={filters.location ?? ""} />
+              <input type="hidden" name="timeframe" value={timeframe} />
+              <input type="hidden" name="sort" value={sort} />
+              <label>
+                Buscar archivos
+                <input
+                  id="manager-query"
+                  name="q"
+                  type="search"
+                  defaultValue={query}
+                  placeholder={`ej. ${scenario.recommendedQuery}`}
+                />
+              </label>
+              <label>
+                Tipo de documento
+                <select id="manager-type" name="type" defaultValue={type}>
+                  <option value="">Todos los tipos</option>
+                  {Object.entries(documentTypeLabels).map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Categoría
+                <select
+                  id="manager-category"
+                  name="category"
+                  defaultValue={filters.category ?? ""}
+                >
+                  <option value="">Todas las categorías</option>
+                  {DOCUMENT_CATEGORIES.map(({ id, label }) => (
+                    <option key={id} value={id}>{label}</option>
+                  ))}
+                  <option value="unclassified">Sin clasificar</option>
+                </select>
+              </label>
+              <button className="button search-submit" type="submit">Aplicar</button>
+            </Form>
           </details>
+          </section>
         </div>
 
         {/* Right column: Evidencia / Gobernanza */}
@@ -1411,6 +1187,9 @@ export default function Workspace({
                         {labels[selected.status]}
                       </span>
                     </div>
+
+                    <details className="full-evidence-disclosure">
+                      <summary>Vista previa y detalles completos</summary>
 
                     {predecessors.length === 1 && (
                       <button
@@ -1618,6 +1397,7 @@ export default function Workspace({
                         </p>
                       )}
                     </section>
+                    </details>
                   </>
                 ) : (
                   <p>

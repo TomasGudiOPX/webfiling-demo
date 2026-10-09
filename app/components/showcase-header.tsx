@@ -11,9 +11,11 @@ export const profileLabels = {
 export function ShowcaseHeader({
   profile,
   workspace = false,
+  settingsPage = false,
 }: {
   profile: DemoProfileId;
   workspace?: boolean;
+  settingsPage?: boolean;
 }) {
   return (
     <header className="topbar showcase-topbar">
@@ -22,13 +24,12 @@ export function ShowcaseHeader({
           webfiling<span className="brand-dot">·</span>
         </Link>
         <span className="badge-tag">ARCHIVO DOCUMENTAL</span>
+        <span className="demo-badge" title="Entorno de demostración, no producción">
+          DEMO <span>· SOLO DEMOSTRACIÓN</span>
+        </span>
       </div>
       <div className="topbar-actions">
-        {workspace && (
-          <Link className="back-link" to="/file">
-            ← Volver a proyectos
-          </Link>
-        )}
+        {workspace && <nav className="showcase-nav-actions" aria-label="Navegación principal"><Link className="back-link" to="/file">← Volver a proyectos</Link></nav>}
         <form
           method="post"
           action="/api/demo-profile"
@@ -53,6 +54,14 @@ export function ShowcaseHeader({
             <button>Cambiar perfil</button>
           </noscript>
         </form>
+        {profile === "system-administrator" && !settingsPage && (
+          <Link className="settings-nav-link" to="/settings/calendar" aria-label="Configuración del calendario" title="Configuración del calendario">
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="5" width="18" height="16" rx="2" />
+              <path d="M16 3v4M8 3v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 17h.01M12 17h.01" />
+            </svg>
+          </Link>
+        )}
       </div>
     </header>
   );

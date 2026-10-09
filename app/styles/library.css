@@ -308,6 +308,10 @@ body:has(.library-shell) .theme-toggle-label {
   overflow-wrap: anywhere;
   margin-bottom: 5px;
 }
+.library-file-info small {
+  display: block;
+  overflow-wrap: anywhere;
+}
 .library-file-meta {
   font-size: 11px;
   color: var(--text-dim);
@@ -353,6 +357,8 @@ body:has(.library-shell) .theme-toggle-label {
 }
 .library-folders a > span:nth-child(2) {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .library-folders a > span:first-child {
   font-size: 24px;
@@ -415,6 +421,21 @@ body:has(.library-shell) .theme-toggle-label {
 .library-detail .preview-dialog-content {
   max-height: 75vh;
   overflow: auto;
+}
+.library-detail .preview-dialog-content.has-details {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.85fr) minmax(0, 1.7fr);
+  align-items: start;
+  gap: 24px;
+}
+.library-detail .preview-dialog-details {
+  max-height: 75vh;
+  overflow: auto;
+  padding-right: 20px;
+  border-right: 1px solid var(--line);
+}
+.library-detail .preview-dialog-document {
+  min-width: 0;
 }
 .library-detail .preview-dialog .pdf-preview-box {
   max-height: none;
@@ -545,6 +566,15 @@ body:has(.library-shell) .theme-toggle-label {
   }
   .library-detail {
     width: 100%;
+  }
+  .library-detail .preview-dialog-content.has-details {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .library-detail .preview-dialog-details {
+    max-height: 36vh;
+    padding: 0 0 16px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
   }
   .has-selection .library-results {
     display: none;
