@@ -32,6 +32,7 @@ import {
   supersessionPredecessors,
 } from "../document-navigation";
 import { RelationGraph } from "../components/relation-graph";
+import "../styles/showcase.css";
 import { DocumentPreview } from "../components/document-preview";
 import {
   listDecisionEvents,
@@ -623,6 +624,7 @@ export default function Workspace({
     predecessorId: string;
   } | null>(null);
   const [rightOpen, setRightOpen] = useState(true);
+  const [graphPreviewId, setGraphPreviewId] = useState<string | null>(null);
   const [filePage, setFilePage] = useState(0);
   const [rightPanel, setRightPanel] = useState<"evidence" | "actions">(
     "evidence",
@@ -777,9 +779,16 @@ export default function Workspace({
         <RelationGraph
           graph={graph}
           selectedId={selected?.id}
-          projectSlug={project.slug}
-          preserve={filters}
-          onSelect={() => setRightPanel("evidence")}
+          modalOpen={Boolean(graphPreviewId)}
+          onSelectFile={(id) => {
+            setRightPanel("evidence");
+            navigate(workspaceUrl(project.slug, filters, id), { replace: true, preventScrollReset: true });
+          }}
+          onOpenFile={(id) => {
+            setRightPanel("evidence");
+            setGraphPreviewId(id);
+            navigate(workspaceUrl(project.slug, filters, id), { replace: true, preventScrollReset: true });
+          }}
         />
       </details>
 
@@ -1267,19 +1276,17 @@ export default function Workspace({
                     )}
 
                     <div className="preview-card">
-                      {selected.preview ? (
-                        <DocumentPreview
-                          fileId={selected.id}
-                          preview={selected.preview}
-                        />
-                      ) : (
-                        <div className="unavailable-preview">
-                          <strong>Vista no disponible</strong>
-                          <small>
-                            La evidencia y los metadatos siguen disponibles.
-                          </small>
-                        </div>
-                      )}
+                      <DocumentPreview
+                        key={selected.id}
+                        fileId={selected.id}
+                        preview={selected.preview ?? {
+                          kind: "unavailable",
+                          title: selected.filename,
+                          reason: "La evidencia y los metadatos siguen disponibles.",
+                        }}
+                        expandedOnMount={graphPreviewId === selected.id}
+                        onDismiss={() => setGraphPreviewId(null)}
+                      />
                     </div>
 
                     {/* Complete Provenance & Audit Fact Sheet */}

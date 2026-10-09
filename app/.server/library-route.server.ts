@@ -53,6 +53,9 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const field = (name: string) => String(form.get(name) ?? "");
     const intent = field("intent");
     const fileId = field("fileId");
+    const canAdministerFiles = profile === "administration-staff" || profile === "system-administrator";
+    if (["edit", "trash", "restore"].includes(intent) && !canAdministerFiles)
+      throw new FileInputError("Solo Administración o un perfil superior puede editar o eliminar archivos.", 403);
     const url = new URL(request.url);
     // Framework data requests may use /file.data; redirects must target the public route.
     url.pathname = params.projectSlug ? `/file/${encodeURIComponent(params.projectSlug)}` : "/file";

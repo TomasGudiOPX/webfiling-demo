@@ -2,7 +2,6 @@ import { Form, Link, useLoaderData, useLocation } from "react-router";
 import type { browserModel } from "../.server/file-browser.server";
 import { DOCUMENT_CATEGORIES } from "../types";
 import { ShowcaseHeader } from "./showcase-header";
-import DummyCalendar from "./dummy-calendar";
 import "../styles/showcase.css";
 
 export default function ProjectShowcase() {
@@ -141,7 +140,6 @@ export default function ProjectShowcase() {
         </div>
       </section>
       {/* Original live calendar: <CollectionCalendar collections={model.collections} /> */}
-      <DummyCalendar />
     </main>
   );
 }

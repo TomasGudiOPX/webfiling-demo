@@ -83,21 +83,18 @@ test("employee can attach a real file from the agent before interpreting any req
   await expect(page.getByLabel("¿Qué necesitás hacer?")).toHaveValue("");
 });
 
-test("the main delivery calendar stays visible on project views for all four profiles", async ({ page }) => {
-  for (const profile of ["employee", "manager", "administration-staff", "system-administrator"]) {
-    await useProfile(page, profile);
-    await page.goto("/file?panel=calendar");
-    await expect(page.getByRole("heading", { name: "Calendario de entregas" })).toBeVisible();
-    await expect(page.locator(".agent-panel")).toHaveCount(0);
-  }
-});
-
-test("main file view displays the sample calendar instead of live collection dates", async ({ page }) => {
-  await page.goto("/file");
+test("the sample delivery calendar lives on the calendar settings page", async ({ page }) => {
+  await useProfile(page, "system-administrator");
+  await page.goto("/settings/calendar");
   await expect(page.getByRole("heading", { name: "Calendario de entregas" })).toBeVisible();
   await expect(page.getByText("Datos de ejemplo")).toBeVisible();
   await expect(page.getByRole("list", { name: "Entregas de ejemplo" }).getByText("Entrega de planos")).toBeVisible();
-  await expect(page.getByText("No hay entregas programadas para tus colecciones accesibles.")).toHaveCount(0);
+  await expect(page.locator(".agent-panel")).toHaveCount(0);
+});
+
+test("main file view no longer embeds the sample calendar", async ({ page }) => {
+  await page.goto("/file");
+  await expect(page.getByRole("heading", { name: "Calendario de entregas" })).toHaveCount(0);
   await page.getByLabel("¿Qué necesitas hacer? Pídeselo al agente").fill("Resumir los documentos de Costa Norte");
   await page.getByRole("button", { name: "Abrir agente" }).click();
   await expect(page).toHaveURL(/panel=agent.*intent=/);

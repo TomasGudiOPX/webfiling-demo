@@ -53,8 +53,28 @@ test("shared browser preserves cross-view identities, selection, folder search a
     },
     db,
   );
+  const defaultView = await browserModel("employee", new URL("http://test/file"), undefined, db);
+  const legacyGrid = await browserModel("employee", new URL("http://test/file?view=grid"), undefined, db);
+  assert.equal(defaultView.view, "table");
+  assert.equal(legacyGrid.view, "table");
+  assert.ok(defaultView.graph.nodes.some((node) => (node.projects?.length ?? 0) > 0));
+  assert.ok(defaultView.graph.nodes.some((node) => (node.projects?.length ?? 0) === 0));
+  const linkedNode = defaultView.graph.nodes.find((node) =>
+    node.projects?.some((project) => project.id === "project-costa-norte"),
+  )!;
+  assert.ok(linkedNode, "graph exposes the existing obra membership");
+  const { id: secondProjectId } = db.prepare("SELECT id FROM projects WHERE slug='parque-industrial'").get() as { id: string };
+  db.prepare("INSERT OR IGNORE INTO file_projects (file_id,project_id,created_at) VALUES (?,?,?)")
+    .run(linkedNode.id, secondProjectId, new Date().toISOString());
+  const overlapping = await browserModel("system-administrator", new URL("http://test/file?searchScope=all"), undefined, db);
+  const overlappingNode = overlapping.graph.nodes.find((node) => node.id === linkedNode.id)!;
+  assert.deepEqual(
+    overlappingNode.projects?.map((project) => project.id).sort(),
+    ["project-costa-norte", "project-parque-industrial"],
+    "graph preserves multiple obra memberships on one file",
+  );
   let ids: string[] | undefined;
-  for (const view of ["list", "grid", "folders"]) {
+  for (const view of ["table", "list", "folders"]) {
     const model = await browserModel(
       "employee",
       new URL(
@@ -69,6 +89,10 @@ test("shared browser preserves cross-view identities, selection, folder search a
       model.files.map((file) => file.id),
     );
     assert.equal(model.graph.edges.length, 0);
+    for (const node of model.graph.nodes) {
+      const file = model.files.find((item) => item.id === node.id)!;
+      assert.deepEqual(node.projects?.map((project) => project.id), file.projects.map((project) => project.projectId));
+    }
     assert.equal(model.selected?.id, upload.id);
     assert.ok(
       model.folders.some(

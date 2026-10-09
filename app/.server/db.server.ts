@@ -1110,6 +1110,17 @@ export function getRelationGraph(
   db = openDatabase(),
 ): RelationGraph {
   const files = listProjectFiles(projectId, db);
+  const projectMemberships = new Map<string, Array<{ id: string; name: string }>>();
+  if (files.length) {
+    const memberships = db.prepare(
+      `SELECT fp.file_id AS fileId,p.id,p.name FROM file_projects fp JOIN projects p ON p.id=fp.project_id WHERE fp.file_id IN (${files.map(() => "?").join(",")}) ORDER BY p.name`,
+    ).all(...files.map((file) => file.id)) as Array<{ fileId: string; id: string; name: string }>;
+    for (const membership of memberships) {
+      const current = projectMemberships.get(membership.fileId) ?? [];
+      current.push({ id: membership.id, name: membership.name });
+      projectMemberships.set(membership.fileId, current);
+    }
+  }
   const rows = db
     .prepare(
       "SELECT from_file_id AS fromFileId,to_file_id AS toFileId,relation AS type FROM file_relations WHERE from_file_id IN (SELECT id FROM files WHERE project_id=?) OR to_file_id IN (SELECT id FROM files WHERE project_id=?)",
@@ -1129,6 +1140,7 @@ export function getRelationGraph(
       categoryId: file.categoryId,
       disciplineTag: file.tags.discipline,
       locationTag: file.tags.location,
+      projects: projectMemberships.get(file.id) ?? [],
     })),
     edges,
   };

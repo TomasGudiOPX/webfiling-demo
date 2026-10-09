@@ -472,9 +472,12 @@ export async function browserModel(
         occurredAt: string;
       }>)
     : [];
-  const view = ["list", "grid", "folders"].includes(params.get("view") ?? "")
-    ? params.get("view")!
-    : "list";
+  const requestedView = params.get("view");
+  const view = requestedView === "grid"
+    ? "table"
+    : ["list", "table", "folders"].includes(requestedView ?? "")
+      ? requestedView!
+      : "table";
   return {
     profile,
     projects,
@@ -490,6 +493,7 @@ export async function browserModel(
     all,
     retired: params.has("status") || params.has("at") || params.has("retired"),
     files: matching,
+    graphFiles,
     graph: {
       nodes: graphFiles.map((file) => ({
         id: file.id,
@@ -499,6 +503,10 @@ export async function browserModel(
         categoryId: file.organization.categoryId,
         disciplineTag: file.organization.tags.discipline,
         locationTag: file.organization.tags.location,
+        projects: file.projects.flatMap(({ projectId }) => {
+          const project = projects.find((item) => item.id === projectId);
+          return project ? [{ id: project.id, name: project.name }] : [];
+        }),
       })),
       edges: edges.filter(
         (edge) => graphFileIds.has(edge.from) && graphFileIds.has(edge.to),

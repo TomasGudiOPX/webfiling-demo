@@ -402,6 +402,7 @@ export interface RelationNode {
   categoryId?: string | null;
   disciplineTag?: string | null;
   locationTag?: string | null;
+  projects?: Array<{ id: string; name: string }>;
 }
 
 export interface RelationGraph {

@@ -99,6 +99,10 @@ interface SceneNode {
   ox: number;
   oy: number;
   ext: string;
+  categoryId?: string | null;
+  disciplineTag?: string | null;
+  locationTag?: string | null;
+  projectIds: string[];
 }
 
 interface SceneEdge {
@@ -116,11 +120,18 @@ interface ProjectedNode {
   depth: number;
   radius: number;
   ext: string;
+  searchMatch: boolean;
 }
 
 interface SceneState {
   selectedId: string | null;
   paused?: boolean;
+  focusedId?: string | null;
+  searchQuery?: string;
+  modalOpen?: boolean;
+  groupBy?: "projectId" | "categoryId" | "disciplineTag" | "locationTag";
+  groupValue?: string | null;
+  groupCenters?: Record<string, { x: number; y: number }>;
 }
 
 function quadPoint(from: Point2D, ctrl: Point2D, to: Point2D, t: number): Point2D {
@@ -129,6 +140,82 @@ function quadPoint(from: Point2D, ctrl: Point2D, to: Point2D, t: number): Point2
     x: u * u * from.x + 2 * u * t * ctrl.x + t * t * to.x,
     y: u * u * from.y + 2 * u * t * ctrl.y + t * t * to.y,
   };
+}
+
+function getProjectNodePositions(
+  nodes: SceneNode[],
+  groupId: string | null | undefined,
+  centers: Record<string, { x: number; y: number }> | undefined,
+  width: number,
+  height: number,
+  clearance?: Point2D,
+) {
+  const selectedGroupId = groupId ?? "";
+  const center = centers?.[selectedGroupId];
+  if (!selectedGroupId || !center) return new Map<string, Point2D>();
+  const members = nodes.filter((node) => node.projectIds.includes(selectedGroupId));
+  return new Map<string, Point2D>(members.map((node, index) => {
+    const angle = index * 2.39996;
+    const spread = Math.sqrt(index) * 12;
+    return [node.id, {
+      x: center.x * width + Math.cos(angle) * ((clearance?.x ?? 84) + spread),
+      y: center.y * height + Math.sin(angle) * ((clearance?.y ?? 42) + spread),
+    }];
+  }));
+}
+
+function positionProjectButtons(
+  canvas: HTMLCanvasElement,
+  centers: Record<string, { x: number; y: number }> | undefined,
+  selectedGroupId: string | null | undefined,
+  width: number,
+  height: number,
+  zoom: number,
+  panX: number,
+  panY: number,
+) {
+  const visibleCenters = { ...centers };
+  let clearance: Point2D | undefined;
+  const buttons = Array.from(
+    canvas.parentElement?.querySelectorAll<HTMLButtonElement>("[data-project-group]") ?? [],
+  );
+  const sizes = buttons.map((button) => ({
+    button,
+    width: button.offsetWidth,
+    height: button.offsetHeight,
+  }));
+  const centerX = width * 0.5;
+  const centerY = height * 0.48;
+
+  for (const { button, width: buttonWidth, height: buttonHeight } of sizes) {
+    const groupId = button.dataset.projectGroup ?? "";
+    const center = centers?.[groupId];
+    if (!center) continue;
+    const minX = buttonWidth / 2 + 8;
+    const minY = buttonHeight / 2 + 8;
+    const transformedX = centerX + (center.x * width - centerX) * zoom + panX;
+    const transformedY = centerY + (center.y * height - centerY) * zoom + panY;
+    const screenX = width < buttonWidth + 16
+      ? centerX
+      : Math.max(minX, Math.min(width - minX, transformedX));
+    const screenY = height < buttonHeight + 16
+      ? centerY
+      : Math.max(minY, Math.min(height - minY, transformedY));
+    button.style.left = `${screenX}px`;
+    button.style.top = `${screenY}px`;
+
+    if (groupId === selectedGroupId) {
+      visibleCenters[groupId] = {
+        x: ((screenX - centerX - panX) / zoom + centerX) / width,
+        y: ((screenY - centerY - panY) / zoom + centerY) / height,
+      };
+      clearance = {
+        x: (buttonWidth / 2 + 20) / zoom,
+        y: (buttonHeight / 2 + 20) / zoom,
+      };
+    }
+  }
+  return { centers: visibleCenters, clearance };
 }
 
 /**
@@ -163,12 +250,20 @@ export class RelationScene {
   private dragStartOffset = { x: 0, y: 0 };
   private moved = false;
   private hoveredNodeId: string | null = null;
+  private dragMode: "node" | "select" | "pan" | null = null;
+  private panStart = { x: 0, y: 0 };
+  private panOrigin = { x: 0, y: 0 };
+  private panX = 0;
+  private panY = 0;
+  private zoom = 1;
+  private pendingClick: { id: string; timer: number } | null = null;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly graph: SceneGraph,
     private readonly state: () => SceneState,
     private readonly onSelect: (nodeId: string) => void,
+    private readonly onOpen: (nodeId: string) => void,
   ) {
     const context = canvas.getContext("2d");
     if (!context) throw new Error("Canvas 2D is unavailable");
@@ -194,6 +289,10 @@ export class RelationScene {
         ox: 0,
         oy: 0,
         ext: getFileExtension(node.label),
+        categoryId: node.categoryId,
+        disciplineTag: node.disciplineTag,
+        locationTag: node.locationTag,
+        projectIds: (node.projects ?? []).map((project) => project.id),
       };
     });
     this.edges = graph.edges.filter(
@@ -227,6 +326,8 @@ export class RelationScene {
     canvas.addEventListener("pointerup", this.onPointerUp);
     canvas.addEventListener("pointercancel", this.onPointerUp);
     canvas.addEventListener("pointerleave", this.onPointerLeave);
+    canvas.addEventListener("wheel", this.onWheel, { passive: false });
+    document.addEventListener("keydown", this.onKeyDown);
     this.refresh();
   }
 
@@ -270,13 +371,35 @@ export class RelationScene {
   private draw() {
     if (!this.width || !this.height) return;
     const ctx = this.context;
-    const { selectedId } = this.state();
+    const { selectedId, focusedId, searchQuery, groupBy, groupValue, groupCenters } = this.state();
+    const grouped = groupValue && groupBy
+      ? this.nodes.filter((node) => groupBy === "projectId"
+        ? node.projectIds.includes(groupValue)
+        : node[groupBy] === groupValue)
+      : [];
+    const groupedIds = new Set(grouped.map((node) => node.id));
     const w = this.width;
     const h = this.height;
+    this.canvas.dataset.zoom = this.zoom.toFixed(2);
+    this.canvas.dataset.groupBy = groupBy ?? "";
+    this.canvas.dataset.groupValue = groupValue ?? "";
+    this.canvas.dataset.groupNodeCount = grouped.length.toString();
+    this.canvas.dataset.panX = Math.round(this.panX).toString();
+    this.canvas.dataset.panY = Math.round(this.panY).toString();
     ctx.clearRect(0, 0, w, h);
 
     const cx = w * 0.5;
     const cy = h * 0.48;
+    const { centers: visibleGroupCenters, clearance: selectedGroupClearance } = positionProjectButtons(
+      this.canvas,
+      groupCenters,
+      groupValue,
+      w,
+      h,
+      this.zoom,
+      this.panX,
+      this.panY,
+    );
     const scaleX = Math.min(w * 0.48, h * 0.78);
     const scaleY = Math.min(h * 0.6, w * 0.46);
 
@@ -285,7 +408,9 @@ export class RelationScene {
     const breathing = 1 + Math.sin(this.elapsed * 0.0017) * 0.022;
 
     // Document nodes float across the whole network field.
-    this.projected = this.nodes.map((node) => {
+    const query = searchQuery?.trim().toLocaleLowerCase("es") ?? "";
+    const projectPositions = getProjectNodePositions(this.nodes, groupValue, visibleGroupCenters, w, h, selectedGroupClearance);
+    const raw = this.nodes.map((node) => {
       const drift = Math.sin(this.elapsed * 0.0011 + node.nz * 8) * 0.004;
       const driftY = Math.cos(this.elapsed * 0.0013 + node.nz * 6) * 0.004;
       const x = node.nx * breathing + drift;
@@ -299,22 +424,30 @@ export class RelationScene {
       const depth = Math.max(0, Math.min(1, (z2 + 1) / 2));
       return {
         id: node.id,
-        x: cx + rx * scaleX * perspective + node.ox,
-        y: cy + ry * scaleY * perspective + node.oy,
+        x: (projectPositions.get(node.id)?.x ?? cx + rx * scaleX * perspective) + node.ox,
+        y: (projectPositions.get(node.id)?.y ?? cy + ry * scaleY * perspective) + node.oy,
         depth,
         radius: 6 + depth * 3.5,
         ext: node.ext,
+        searchMatch: !query || node.label.toLocaleLowerCase("es").includes(query),
       };
     });
+    this.projected = raw.map((point) => ({
+      ...point,
+      x: cx + (point.x - cx) * this.zoom + this.panX,
+      y: cy + (point.y - cy) * this.zoom + this.panY,
+      radius: point.radius * this.zoom,
+    }));
     const byId = new Map(this.projected.map((p) => [p.id, p]));
 
-    const selectedConnected = selectedId
-      ? this.computeConnected(selectedId)
+    const emphasisId = groupValue ? null : focusedId ?? selectedId;
+    const selectedConnected = emphasisId
+      ? this.computeConnected(emphasisId)
       : new Set<string>();
-    const hoveredConnected = this.hoveredNodeId
+    const hoveredConnected = !groupValue && this.hoveredNodeId
       ? this.computeConnected(this.hoveredNodeId)
       : new Set<string>();
-    const hasFocus = Boolean(selectedId || this.hoveredNodeId);
+    const hasFocus = Boolean(emphasisId || (!groupValue && this.hoveredNodeId));
     const connected = hasFocus
       ? new Set([...selectedConnected, ...hoveredConnected])
       : null;
@@ -331,10 +464,13 @@ export class RelationScene {
       const a = byId.get(from);
       const b = byId.get(to);
       if (!a || !b) return;
-      const selectedPath = Boolean(selectedId && (from === selectedId || to === selectedId));
+      const selectedPath = Boolean(emphasisId && (from === emphasisId || to === emphasisId));
       const hoveredPath = Boolean(this.hoveredNodeId && (from === this.hoveredNodeId || to === this.hoveredNodeId));
       const isActive = selectedPath || hoveredPath;
-      const alpha = selectedPath ? 0.64 : hoveredPath ? 0.4 : hasFocus ? 0.24 : 0.3;
+      const groupAlpha = !groupValue || (groupedIds.has(from) && groupedIds.has(to))
+        ? 1
+        : groupedIds.has(from) || groupedIds.has(to) ? 0.1 : 0.025;
+      const alpha = (selectedPath ? 0.64 : hoveredPath ? 0.4 : hasFocus ? 0.24 : 0.3) * (query ? 0.45 : 1) * groupAlpha;
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const length = Math.max(1, Math.hypot(dx, dy));
@@ -370,16 +506,19 @@ export class RelationScene {
         color: MUTED,
         label: edge.type,
       };
-      const selectedPath = Boolean(selectedId && (edge.from === selectedId || edge.to === selectedId));
+      const selectedPath = Boolean(emphasisId && (edge.from === emphasisId || edge.to === emphasisId));
       const hoveredPath = Boolean(this.hoveredNodeId && (edge.from === this.hoveredNodeId || edge.to === this.hoveredNodeId));
       const isActive = selectedPath || hoveredPath;
-      const alpha = selectedPath
+      const groupAlpha = !groupValue || (groupedIds.has(edge.from) && groupedIds.has(edge.to))
+        ? 1
+        : groupedIds.has(edge.from) || groupedIds.has(edge.to) ? 0.1 : 0.025;
+      const alpha = (selectedPath
         ? 0.66 + (a.depth + b.depth) * 0.08
         : hoveredPath
           ? 0.43 + (a.depth + b.depth) * 0.06
           : hasFocus
             ? 0.24
-            : 0.58;
+          : 0.58) * (query ? 0.45 : 1) * groupAlpha;
 
       const midX = (a.x + b.x) / 2;
       const midY = (a.y + b.y) / 2;
@@ -432,7 +571,9 @@ export class RelationScene {
       if (this.animating && (isActive || !hasFocus)) {
         const t = (this.elapsed / 1300 + index * 0.33) % 1;
         const pulse = quadPoint(a, ctrl, b, t);
+        ctx.globalAlpha = alpha;
         this.spark(pulse.x, pulse.y, selectedPath || hoveredPath ? 2.4 : 2);
+        ctx.globalAlpha = 1;
       }
     });
 
@@ -440,14 +581,16 @@ export class RelationScene {
     this.nodes.forEach((node) => {
       const p = byId.get(node.id);
       if (!p) return;
-      const isSelected = node.id === selectedId;
-      const isHovered = node.id === this.hoveredNodeId;
+       const isSelected = node.id === emphasisId;
+      const isHovered = !groupValue && node.id === this.hoveredNodeId;
       const isDimmed = connected ? !connected.has(node.id) : false;
-      const nodeAlpha = isDimmed ? 0.72 : 1;
+       const isGrouped = groupedIds.has(node.id);
+       const groupDimmed = Boolean(groupValue && !isGrouped);
+       const nodeAlpha = (groupDimmed ? 0.075 : isDimmed ? 0.72 : 1) * (p.searchMatch ? 1 : 0.24);
       const statusColor = STATUS_COLORS[node.status] ?? "#ff9c62";
 
       const isActiveNode = activeNodes.has(node.id);
-      if (isSelected || (!selectedId && isHovered) || (this.animating && isActiveNode && !hasFocus)) {
+      if (isSelected || (!emphasisId && isHovered) || (this.animating && isActiveNode && !hasFocus && !groupValue)) {
         const phase = [...node.id].reduce(
           (sum, char) => sum + char.charCodeAt(0),
           0,
@@ -456,6 +599,15 @@ export class RelationScene {
       }
 
       ctx.globalAlpha = nodeAlpha;
+      if (groupValue && isGrouped) {
+        ctx.save();
+        ctx.strokeStyle = "#b0c586";
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius + 6, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
 
       // Outer glowing halo
       if (isSelected || isHovered) {
@@ -481,14 +633,14 @@ export class RelationScene {
       ctx.globalAlpha = 1;
 
       // Document Label with high-contrast badge pill
-      if (isSelected || isHovered || (connected && connected.has(node.id))) {
+       if (isGrouped || isSelected || isHovered || (connected && connected.has(node.id)) || (query && p.searchMatch)) {
         this.drawNodeLabel(
           ctx,
           node,
           p.x,
           p.y + p.radius + 12,
           isSelected,
-          isDimmed,
+           nodeAlpha,
           w < 440,
         );
       }
@@ -587,7 +739,7 @@ export class RelationScene {
     x: number,
     y: number,
     isSelected: boolean,
-    isDimmed: boolean,
+    opacity: number,
     isMobile: boolean,
   ) {
     const maxChars = isMobile ? 15 : 24;
@@ -605,7 +757,7 @@ export class RelationScene {
     const pillY = y - 9;
 
     ctx.save();
-    ctx.globalAlpha = isDimmed ? 0.35 : 1;
+    ctx.globalAlpha = opacity;
 
     // Glassmorphic pill container
     ctx.fillStyle = isSelected ? "rgba(20, 24, 20, 0.94)" : "rgba(11, 13, 12, 0.88)";
@@ -695,15 +847,30 @@ export class RelationScene {
 
   private readonly onPointerDown = (event: PointerEvent) => {
     const id = this.hitTest(event.clientX, event.clientY);
-    if (!id) return;
+    if (!id) {
+      this.dragMode = "pan";
+      this.panStart = { x: event.clientX, y: event.clientY };
+      this.panOrigin = { x: this.panX, y: this.panY };
+      this.moved = false;
+      this.canvas.style.cursor = "grabbing";
+      try {
+        this.canvas.setPointerCapture(event.pointerId);
+      } catch {
+        // pointer capture is best-effort
+      }
+      return;
+    }
     const node = this.nodes.find((item) => item.id === id);
     if (!node) return;
+    const groupValue = this.state().groupValue;
+    const canMove = !groupValue || node.projectIds.includes(groupValue);
     this.dragNodeId = id;
+    this.dragMode = canMove ? "node" : "select";
     this.dragStartX = event.clientX;
     this.dragStartY = event.clientY;
     this.dragStartOffset = { x: node.ox, y: node.oy };
     this.moved = false;
-    this.canvas.style.cursor = "grabbing";
+    this.canvas.style.cursor = canMove ? "grabbing" : "pointer";
     try {
       this.canvas.setPointerCapture(event.pointerId);
     } catch {
@@ -712,15 +879,30 @@ export class RelationScene {
   };
 
   private readonly onPointerMove = (event: PointerEvent) => {
-    if (this.dragNodeId) {
+    if (this.dragMode === "pan") {
+      const dx = event.clientX - this.panStart.x;
+      const dy = event.clientY - this.panStart.y;
+      if (!this.moved && Math.hypot(dx, dy) > 4) this.moved = true;
+      if (this.moved) {
+        this.panX = this.panOrigin.x + dx;
+        this.panY = this.panOrigin.y + dy;
+        this.draw();
+      }
+      return;
+    }
+    if (this.dragMode === "select") {
+      if (Math.hypot(event.clientX - this.dragStartX, event.clientY - this.dragStartY) > 4) this.moved = true;
+      return;
+    }
+    if (this.dragMode === "node" && this.dragNodeId) {
       const dx = event.clientX - this.dragStartX;
       const dy = event.clientY - this.dragStartY;
       if (!this.moved && Math.hypot(dx, dy) > 4) this.moved = true;
       if (this.moved) {
         const node = this.nodes.find((item) => item.id === this.dragNodeId);
         if (node) {
-          node.ox = this.dragStartOffset.x + dx;
-          node.oy = this.dragStartOffset.y + dy;
+          node.ox = this.dragStartOffset.x + dx / this.zoom;
+          node.oy = this.dragStartOffset.y + dy / this.zoom;
           this.draw();
         }
       }
@@ -745,10 +927,29 @@ export class RelationScene {
   };
 
   private readonly onPointerUp = (event: PointerEvent) => {
-    if (event.type !== "pointercancel" && this.dragNodeId && !this.moved) {
-      this.onSelect(this.dragNodeId);
+    if (
+      event.type !== "pointercancel" &&
+      (this.dragMode === "node" || this.dragMode === "select") &&
+      this.dragNodeId &&
+      !this.moved
+    ) {
+      const id = this.dragNodeId;
+      if (this.pendingClick?.id === id) {
+        window.clearTimeout(this.pendingClick.timer);
+        this.pendingClick = null;
+        this.onOpen(id);
+      } else {
+        if (this.pendingClick) window.clearTimeout(this.pendingClick.timer);
+        const timer = window.setTimeout(() => {
+          this.pendingClick = null;
+          this.onSelect(id);
+          this.refresh();
+        }, 240);
+        this.pendingClick = { id, timer };
+      }
     }
     this.dragNodeId = null;
+    this.dragMode = null;
     this.moved = false;
     this.canvas.style.cursor = this.hoveredNodeId ? "pointer" : "grab";
     try {
@@ -759,6 +960,41 @@ export class RelationScene {
       // pointer capture is best-effort
     }
   };
+
+  private readonly onWheel = (event: WheelEvent) => {
+    event.preventDefault();
+    const bounds = this.canvas.getBoundingClientRect();
+    const x = event.clientX - bounds.left;
+    const y = event.clientY - bounds.top;
+    const next = Math.max(0.65, Math.min(2.5, this.zoom * Math.exp(-event.deltaY * 0.001)));
+    const cx = this.width / 2;
+    const cy = this.height * 0.48;
+    const worldX = (x - cx - this.panX) / this.zoom;
+    const worldY = (y - cy - this.panY) / this.zoom;
+    this.panX = x - cx - worldX * next;
+    this.panY = y - cy - worldY * next;
+    this.zoom = next;
+    this.refresh();
+  };
+
+  private readonly onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === "Escape" && !this.state().modalOpen) this.resetView();
+  };
+
+  zoomBy(amount: number) {
+    this.zoom = Math.max(0.65, Math.min(2.5, this.zoom * amount));
+    this.refresh();
+  }
+
+  resetView() {
+    if (this.pendingClick) window.clearTimeout(this.pendingClick.timer);
+    this.pendingClick = null;
+    this.panX = 0;
+    this.panY = 0;
+    this.zoom = 1;
+    this.onSelect("");
+    this.refresh();
+  }
 
   private readonly onPointerLeave = () => {
     this.targetTiltX = 0;
@@ -810,5 +1046,8 @@ export class RelationScene {
     this.canvas.removeEventListener("pointerup", this.onPointerUp);
     this.canvas.removeEventListener("pointercancel", this.onPointerUp);
     this.canvas.removeEventListener("pointerleave", this.onPointerLeave);
+    this.canvas.removeEventListener("wheel", this.onWheel);
+    document.removeEventListener("keydown", this.onKeyDown);
+    if (this.pendingClick) window.clearTimeout(this.pendingClick.timer);
   }
 }

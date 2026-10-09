@@ -5,6 +5,7 @@ import {
   useActionData,
   useLoaderData,
   useLocation,
+  useNavigate,
   useNavigation,
 } from "react-router";
 import type { browserModel, BrowserFile } from "../.server/file-browser.server";
@@ -15,6 +16,7 @@ import { RelationGraph } from "./relation-graph";
 import { ShowcaseHeader } from "./showcase-header";
 import "../styles/library.css";
 import "../styles/showcase.css";
+import "../styles/file-manager-table.css";
 
 type Model = Awaited<ReturnType<typeof browserModel>>;
 const profiles = {
@@ -22,6 +24,11 @@ const profiles = {
   manager: "Gerencia",
   "administration-staff": "Administración",
   "system-administrator": "Administrador del sistema",
+};
+const documentTypeLabels: Record<string, string> = {
+  plan: "Plano", notice: "Aviso", other: "Otro documento", technical: "Documento técnico",
+  contract: "Contrato", log: "Registro", specification: "Especificación", financial: "Finanzas",
+  logistics: "Logística", hse: "Seguridad e higiene", procurement: "Compras",
 };
 const events: Record<string, string> = {
   uploaded: "Archivo cargado",
@@ -38,6 +45,16 @@ const size = (bytes: number) =>
     : bytes < 1048576
       ? `${Math.round(bytes / 1024)} KB`
       : `${(bytes / 1048576).toFixed(1)} MB`;
+function ActionIcon({ kind }: { kind: "details" | "download" | "edit" | "remove" | "restore" }) {
+  const paths = {
+    details: <><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" /><circle cx="12" cy="12" r="2.5" /></>,
+    download: <><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14" /></>,
+    edit: <><path d="m14 5 5 5M4 20l4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z" /></>,
+    remove: <><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3" /></>,
+    restore: <><path d="M3 11a9 9 0 1 1 2.6 6.4M3 4v7h7" /><path d="M12 7v5l3 2" /></>,
+  };
+  return <svg className="action-icon" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[kind]}</svg>;
+}
 function Choice({
   name,
   label,
@@ -158,10 +175,10 @@ function Upload({ model, close }: { model: Model; close: () => void }) {
     </section>
   );
 }
-function Edit({ file, model }: { file: BrowserFile; model: Model }) {
+function Edit({ file, model, open = false }: { file: BrowserFile; model: Model; open?: boolean }) {
   return (
-    <details className="library-edit">
-      <summary>Organizar archivo</summary>
+    <details className="library-edit" open={open}>
+      <summary><ActionIcon kind="edit" />Editar archivo</summary>
       <Form method="post" encType="multipart/form-data">
         <input type="hidden" name="intent" value="edit" />
         <input type="hidden" name="fileId" value={file.id} />
@@ -242,6 +259,7 @@ type FileDetailsProps = {
   setCompare: (value: string) => void;
   href: (values: Record<string, string | null>, root?: boolean) => string;
   withActivePanel: (target: string) => string;
+  editOpen?: boolean;
 };
 
 function FileDetails({
@@ -251,10 +269,21 @@ function FileDetails({
   setCompare,
   href,
   withActivePanel,
+  editOpen = false,
 }: FileDetailsProps) {
+  const canAdministerFiles = model.profile === "administration-staff" || model.profile === "system-administrator";
   return (
     <details className="library-full-details" open>
       <summary>Detalles del archivo</summary>
+      {canAdministerFiles && current.capabilities.canEdit && current.origin === "managed_upload" && (
+        <nav className="file-detail-actions" aria-label="Acciones del archivo">
+          <Form method="post" onSubmit={(event) => { if (!window.confirm(`¿Enviar “${current.displayName}” a la papelera?`)) event.preventDefault(); }}>
+            <input type="hidden" name="intent" value={model.trash ? "restore" : "trash"} />
+            <input type="hidden" name="fileId" value={current.id} />
+            <button className="icon-action table-action-danger" type="submit" aria-label={model.trash ? "Restaurar archivo" : "Eliminar archivo"} title={model.trash ? "Restaurar archivo" : "Eliminar archivo"}><ActionIcon kind={model.trash ? "restore" : "remove"} /></button>
+          </Form>
+        </nav>
+      )}
       <dl>
         <dt>Colección</dt>
         <dd>{current.collectionName}</dd>
@@ -347,23 +376,9 @@ function FileDetails({
           ) : (
             <p>Sin vínculos registrados.</p>
           )}
-          {current.capabilities.canEdit && <Edit file={current} model={model} />}
+          {canAdministerFiles && current.capabilities.canEdit && <Edit file={current} model={model} open={editOpen} />}
         </>
       )}
-      {current.capabilities.canEdit &&
-        current.origin === "managed_upload" && (
-          <Form method="post" encType="multipart/form-data">
-            <input type="hidden" name="fileId" value={current.id} />
-            <input
-              type="hidden"
-              name="intent"
-              value={model.trash ? "restore" : "trash"}
-            />
-            <button>
-              {model.trash ? "Restaurar archivo" : "Enviar a papelera"}
-            </button>
-          </Form>
-        )}
       <details className="library-activity">
         <summary>Actividad del archivo</summary>
         {model.activity.length ? (
@@ -391,6 +406,7 @@ export default function FileLibrary() {
   const model = useLoaderData<Model>();
   const action = useActionData<{ error?: string }>();
   const location = useLocation();
+  const navigate = useNavigate();
   const [upload, setUpload] = useState(false);
   const results = useRef<HTMLHeadingElement>(null);
   const detail = useRef<HTMLHeadingElement>(null);
@@ -398,6 +414,9 @@ export default function FileLibrary() {
   const [compare, setCompare] = useState("");
   const [filePage, setFilePage] = useState(0);
   const [managerExpanded, setManagerExpanded] = useState(false);
+  const [graphPreviewId, setGraphPreviewId] = useState<string | null>(null);
+  const [editModalId, setEditModalId] = useState<string | null>(null);
+  const [pendingModal, setPendingModal] = useState<{ id: string; edit: boolean } | null>(null);
   useEffect(() => {
     if (previousSelection.current !== model.selected?.id) {
       if (model.selected) detail.current?.focus({ preventScroll: true });
@@ -407,6 +426,13 @@ export default function FileLibrary() {
     setCompare("");
     setUpload(false);
   }, [model.selected?.id, model.profile]);
+  useEffect(() => {
+    if (pendingModal && model.selected?.id === pendingModal.id) {
+      setGraphPreviewId(pendingModal.id);
+      setEditModalId(pendingModal.edit ? pendingModal.id : null);
+      setPendingModal(null);
+    }
+  }, [pendingModal, model.selected?.id]);
   useEffect(() => {
     if (!managerExpanded) return;
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -431,6 +457,20 @@ export default function FileLibrary() {
     return `${target}${target.includes("?") ? "&" : "?"}panel=${panel}`;
   };
   const current = model.selected;
+  const openFileModal = (id: string, edit = false) => {
+    setManagerExpanded(false);
+    if (current?.id === id) {
+      setGraphPreviewId(id);
+      setEditModalId(edit ? id : null);
+      return;
+    }
+    setPendingModal({ id, edit });
+    navigate(href({ selected: id, evidence: null }), { replace: true, preventScrollReset: true });
+  };
+  const canAdministerFiles = model.profile === "administration-staff" || model.profile === "system-administrator";
+  const graphPreviewFile = graphPreviewId
+    ? model.graphFiles.find((file) => file.id === graphPreviewId) ?? model.files.find((file) => file.id === graphPreviewId)
+    : undefined;
   const pageSize = 20;
   const pageCount = Math.max(1, Math.ceil(model.files.length / pageSize));
   const visiblePage = Math.min(filePage, pageCount - 1);
@@ -459,11 +499,11 @@ export default function FileLibrary() {
     >
       <ShowcaseHeader profile={model.profile} workspace />
       <div className="library-layout">
-        <nav className="library-sidebar" aria-label="Colecciones y proyectos">
+        <nav className="library-sidebar" aria-label="Navegación de archivos">
           <div className="library-sidebar-group">
             <span className="library-sidebar-label">ARCHIVO</span>
             <Link
-              to={href({ selected: null, evidence: null }, true)}
+              to={href({ selected: null, evidence: null, trash: null, folder: null, collection: null, project: null }, true)}
               className={
                 !model.collectionId && !model.project && !model.trash
                   ? "active"
@@ -482,52 +522,6 @@ export default function FileLibrary() {
               Papelera
             </Link>
           </div>
-          <div className="library-sidebar-group">
-            <span className="library-sidebar-label">COLECCIONES</span>
-            {model.collections.map((c) => (
-              <Link
-                key={c.id}
-                to={href(
-                  {
-                    collection: c.id,
-                    folder: null,
-                    selected: null,
-                    evidence: null,
-                    searchScope: null,
-                    scope: null,
-                    trash: null,
-                  },
-                  true,
-                )}
-                className={c.id === model.collectionId ? "active" : ""}
-              >
-                {c.name}
-                <small>
-                  {c.capabilities.canOrganize
-                    ? "Organizar"
-                    : c.capabilities.canContribute
-                      ? "Aportar archivos"
-                      : "Solo lectura"}
-                </small>
-              </Link>
-            ))}
-          </div>
-          <details className="library-sidebar-group library-sidebar-projects">
-            <summary>
-              Proyectos vinculados <span>{model.projects.length}</span>
-            </summary>
-            <div className="library-sidebar-links">
-              {model.projects.map((p) => (
-                <Link
-                  key={p.id}
-                  to={withActivePanel(`/file/${p.slug}`)}
-                  className={p.id === model.project?.id ? "active" : ""}
-                >
-                  {p.name}
-                </Link>
-              ))}
-            </div>
-          </details>
           <div className="library-sidebar-group library-demo-group">
             <span className="library-sidebar-label">PRUEBA · MUESTRA</span>
             {model.profile === "system-administrator" && (
@@ -548,7 +542,7 @@ export default function FileLibrary() {
               <p className="eyebrow">
                 {model.project
                   ? "ESPACIO DE OBRA / DOCUMENTOS"
-                  : "ARCHIVO DOCUMENTAL / COLECCIONES"}
+                  : "ARCHIVO DOCUMENTAL / ARCHIVOS"}
               </p>
               <h1>
                 {model.trash
@@ -580,9 +574,9 @@ export default function FileLibrary() {
                 <RelationGraph
                   graph={model.graph}
                   selectedId={current?.id}
-                  projectSlug={model.project?.slug ?? model.projects[0]?.slug ?? "files"}
-                  preserve={model.filters}
-                  fileHref={(id) => href({ selected: id, evidence: null })}
+                  modalOpen={Boolean(graphPreviewId)}
+                  onSelectFile={(id) => navigate(href({ selected: id, evidence: null }), { replace: true, preventScrollReset: true })}
+                  onOpenFile={setGraphPreviewId}
                 />
               </div>
             </details>
@@ -736,6 +730,50 @@ export default function FileLibrary() {
                   </Form>
                 </details>
               )}
+              {(model.trash || managerExpanded) && (
+                <details className="project-file-controls" open={!model.trash}>
+                  <summary>Buscar y filtrar archivos</summary>
+                  <Form method="get" className="project-file-search" key={JSON.stringify(model.filters)}>
+                    <input type="hidden" name="browse" value="1" />
+                    {new URLSearchParams(location.search).get("panel") && <input type="hidden" name="panel" value={new URLSearchParams(location.search).get("panel")!} />}
+                    <input type="hidden" name="view" value={model.view} />
+                    {model.collectionId && <input type="hidden" name="collection" value={model.collectionId} />}
+                    {model.folderId && <input type="hidden" name="folder" value={model.folderId} />}
+                    {model.trash && <input type="hidden" name="trash" value="1" />}
+                    {current && <input type="hidden" name="selected" value={current.id} />}
+                    {!model.trash && managerExpanded && (
+                      <nav className="project-file-views" aria-label="Vista de archivos">
+                        {([
+                          ["table", "Tabla"],
+                          ["list", "Lista"],
+                          ["folders", "Carpetas"],
+                        ] as const).map(([view, label]) => (
+                          <Link key={view} to={href({ view })} aria-current={model.view === view ? "page" : undefined}>
+                            {label}
+                          </Link>
+                        ))}
+                      </nav>
+                    )}
+                    <label>
+                      Buscar archivos
+                      <input type="search" name="q" defaultValue={model.filters.query} placeholder="Nombre, contenido o ubicación…" />
+                    </label>
+                    <Choice name="type" label="Tipo documental" value={model.filters.type} options={Object.fromEntries(DOCUMENT_TYPE_IDS.map((id) => [id, documentTypeLabels[id] ?? id]))} />
+                    <Choice name="category" label="Categoría" value={model.filters.category} options={{ unclassified: "Sin clasificar", ...Object.fromEntries(DOCUMENT_CATEGORIES.map((c) => [c.id, c.label])) }} />
+                    <Choice name="timeframe" label="Modificado" value={model.filters.timeframe} options={{ "7d": "Últimos 7 días", "30d": "Últimos 30 días", "90d": "Últimos 90 días", year: "Último año" }} />
+                    <details className="library-filters project-advanced-filters">
+                      <summary>Filtros adicionales</summary>
+                      <div>
+                        <Choice name="discipline" label="Disciplina" value={model.filters.discipline} options={DISCIPLINE_TAGS} />
+                        <Choice name="location" label="Ubicación temática" value={model.filters.location} options={LOCATION_TAGS} />
+                        <label>Orden<select name="sort" defaultValue={model.filters.sort}><option value="recent">Más recientes</option><option value="oldest">Más antiguos</option><option value="name">Nombre</option></select></label>
+                      </div>
+                    </details>
+                    <button className="primary">Aplicar filtros</button>
+                  </Form>
+                  <Link className="clear-file-filters" to={href({ q: null, category: null, discipline: null, location: null, type: null, timeframe: null, sort: null, status: null, searchScope: null, scope: null })}>Limpiar filtros</Link>
+                </details>
+              )}
               {!model.files.length && (
                 <div className="library-empty">
                   <h3>No hay archivos en esta selección</h3>
@@ -766,16 +804,40 @@ export default function FileLibrary() {
                 </div>
               )}
               <div
-                className={`library-files ${!model.trash && !managerExpanded ? "view-list" : `view-${model.view}`}`}
-                style={
-                  !model.trash && !managerExpanded
-                    ? {
-                        gridTemplateColumns: `repeat(${Math.max(1, Math.ceil(visibleFiles.length / 2))}, minmax(160px, 1fr))`,
-                      }
-                    : undefined
-                }
+                className={`library-files ${!model.trash && (!managerExpanded || model.view === "table") ? "view-table" : `view-${model.view}`}`}
               >
-                {visibleFiles.map((file) => (
+                {!model.trash && (!managerExpanded || model.view === "table") ? (
+                  <div className="library-table-scroll">
+                    <table className="library-table">
+                      <colgroup><col className="file-col-name" /><col className="file-col-type" /><col className="file-col-category" /><col className="file-col-location" /><col className="file-col-date" /><col className="file-col-size" /><col className="file-col-actions" /></colgroup>
+                      <thead><tr><th scope="col">Archivo</th><th scope="col">Tipo</th><th scope="col">Categoría</th><th scope="col">Ubicación</th><th scope="col">Modificado</th><th scope="col">Tamaño</th><th scope="col">Acciones</th></tr></thead>
+                      <tbody>{visibleFiles.map((file) => (
+                        <tr key={file.id} className={current?.id === file.id ? "selected" : ""}>
+                          <td><div className="file-name-cell"><span className="file-extension" aria-hidden="true">{file.extension.replace(".", "").toUpperCase() || "DOC"}</span><span className="file-name-copy"><Link data-file-id={file.id} to={href({ selected: file.id, evidence: null })} aria-current={current?.id === file.id ? "true" : undefined}>{file.displayName}</Link><small>{file.collectionName}</small></span></div></td>
+                          <td><span className="file-type-label">{documentTypeLabels[file.documentType] ?? file.documentType}</span></td>
+                          <td><span className="file-category-label">{DOCUMENT_CATEGORIES.find((c) => c.id === file.organization.categoryId)?.label ?? "Sin clasificar"}</span></td>
+                          <td className="file-location-cell" title={file.location}>{file.location}</td>
+                          <td><time dateTime={file.modifiedAt}>{new Date(file.modifiedAt).toLocaleDateString("es-AR")}</time></td>
+                          <td>{size(file.sizeBytes)}</td>
+                          <td className="file-row-actions">
+                            <button className="icon-action table-action-primary" type="button" onClick={() => openFileModal(file.id)} aria-label={`Detalles de ${file.displayName}`} title="Detalles"><ActionIcon kind="details" /></button>
+                            <a className="icon-action table-action-download" href={`/api/files/${encodeURIComponent(file.id)}/download`} download aria-label={`Descargar ${file.displayName}`} title="Descargar"><ActionIcon kind="download" /></a>
+                            {canAdministerFiles && file.capabilities.canEdit && file.origin === "managed_upload" && (
+                              <Form method="post" onClick={(event) => event.stopPropagation()} onSubmit={(event) => { if (!window.confirm(`¿Enviar “${file.displayName}” a la papelera?`)) event.preventDefault(); }}>
+                                <input type="hidden" name="intent" value="trash" />
+                                <input type="hidden" name="fileId" value={file.id} />
+                                <button className="icon-action table-action-danger" type="submit" aria-label={`Eliminar ${file.displayName}`} title="Eliminar"><ActionIcon kind="remove" /></button>
+                              </Form>
+                            )}
+                            {canAdministerFiles && file.capabilities.canEdit && (
+                              <button className="icon-action table-action-edit" type="button" onClick={() => openFileModal(file.id, true)} aria-label={`Editar ${file.displayName}`} title="Editar"><ActionIcon kind="edit" /></button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}</tbody>
+                    </table>
+                  </div>
+                ) : visibleFiles.map((file) => (
                   <Link
                     data-file-id={file.id}
                     key={file.id}
@@ -812,167 +874,42 @@ export default function FileLibrary() {
               </div>
               {!model.trash && (
                 <nav className="project-file-pagination" aria-label="Páginas de archivos">
-                  <button type="button" onClick={() => setFilePage((page) => Math.max(0, page - 1))} disabled={visiblePage === 0}>Anterior</button>
-                  <span>Página {visiblePage + 1} de {pageCount}</span>
-                  <button type="button" onClick={() => setFilePage((page) => Math.min(pageCount - 1, page + 1))} disabled={visiblePage >= pageCount - 1}>Siguiente</button>
+                  <button className="page-step" type="button" onClick={() => setFilePage((page) => Math.max(0, page - 1))} disabled={visiblePage === 0} aria-label="Página anterior"><span aria-hidden="true">←</span> Anterior</button>
+                  <span className="page-status" aria-live="polite"><span>Página</span><strong>{visiblePage + 1}<i>/</i>{pageCount}</strong></span>
+                  <button className="page-step" type="button" onClick={() => setFilePage((page) => Math.min(pageCount - 1, page + 1))} disabled={visiblePage >= pageCount - 1} aria-label="Página siguiente">Siguiente <span aria-hidden="true">→</span></button>
                 </nav>
               )}
-              {(model.trash || managerExpanded) && (
-              <details className="project-file-controls" open={!model.trash}>
-                <summary>Buscar / cambiar tipo de archivo</summary>
-                <Form method="get" className="project-file-search" key={JSON.stringify(model.filters)}>
-                  <input type="hidden" name="browse" value="1" />
-                  {new URLSearchParams(location.search).get("panel") && <input type="hidden" name="panel" value={new URLSearchParams(location.search).get("panel")!} />}
-                  <input type="hidden" name="view" value={model.view} />
-                  {model.collectionId && <input type="hidden" name="collection" value={model.collectionId} />}
-                  {model.folderId && <input type="hidden" name="folder" value={model.folderId} />}
-                  {model.trash && <input type="hidden" name="trash" value="1" />}
-                  {current && <input type="hidden" name="selected" value={current.id} />}
-                  {!model.trash && managerExpanded && (
-                    <nav className="project-file-views" aria-label="Tipo de vista">
-                      {([
-                        ["list", "Lista"],
-                        ["grid", "Cuadrícula"],
-                        ["folders", "Carpetas"],
-                      ] as const).map(([view, label]) => (
-                        <Link
-                          key={view}
-                          to={href({ view })}
-                          aria-current={model.view === view ? "page" : undefined}
-                        >
-                          {label}
-                        </Link>
-                      ))}
-                    </nav>
-                  )}
-                  <label>
-                    Buscar archivos
-                    <input type="search" name="q" defaultValue={model.filters.query} placeholder="Nombre, contenido o ubicación…" />
-                  </label>
-                  <Choice
-                    name="type"
-                    label="Tipo documental"
-                    value={model.filters.type}
-                    options={Object.fromEntries(DOCUMENT_TYPE_IDS.map((id) => [id, id]))}
-                  />
-                  <Choice
-                    name="category"
-                    label="Categoría"
-                    value={model.filters.category}
-                    options={{
-                      unclassified: "Sin clasificar",
-                      ...Object.fromEntries(DOCUMENT_CATEGORIES.map((c) => [c.id, c.label])),
-                    }}
-                  />
-                  <details className="library-filters project-advanced-filters">
-                    <summary>Filtros avanzados</summary>
-                    <div>
-                      <Choice name="discipline" label="Disciplina" value={model.filters.discipline} options={DISCIPLINE_TAGS} />
-                      <Choice name="location" label="Ubicación temática" value={model.filters.location} options={LOCATION_TAGS} />
-                      <Choice name="timeframe" label="Modificado" value={model.filters.timeframe} options={{ "7d": "Últimos 7 días", "30d": "Últimos 30 días", "90d": "Últimos 90 días", year: "Último año" }} />
-                      <label>Orden<select name="sort" defaultValue={model.filters.sort}><option value="recent">Más recientes</option><option value="oldest">Más antiguos</option><option value="name">Nombre</option></select></label>
-                    </div>
-                  </details>
-                  <button className="primary">Buscar</button>
-                </Form>
-              </details>
-              )}
-            </section>
-            {!current && !model.trash && (
-              <aside
-                className="showcase-preview-placeholder"
-                aria-label="Vista previa"
-              >
-                <p className="eyebrow">DOCUMENTO Y CONTEXTO</p>
-                <h2>
-                  Todo sobre un archivo,
-                  <br />
-                  en el mismo lugar.
-                </h2>
-                <p>
-                  Selecciona un documento para ver su contenido, ubicación,
-                  etiquetas, versiones y archivos relacionados.
-                </p>
-                <span className="showcase-preview-mark" aria-hidden="true">
-                  ↗
-                </span>
-              </aside>
-            )}
-            {current && (
-              <aside
-                className="library-detail"
-                aria-label="Detalles del archivo"
-                key={`${model.profile}:${current.id}`}
-              >
-                <h2 tabIndex={-1} ref={detail}>
-                  {current.displayName}
-                </h2>
-                <p>
-                  {current.origin === "source"
-                    ? "Servidor · solo lectura"
-                    : current.origin === "managed_upload"
-                      ? "Archivo cargado"
-                      : current.origin === "fixture"
-                        ? ""
-                        : "Sin contenido almacenado"}
-                </p>
-                {!model.trash && (
-                  <>
-                    {current.preview ? (
-                      <DocumentPreview
-                        fileId={current.id}
-                        preview={current.preview}
-                        downloadUrl={`/api/files/${current.id}/download`}
-                        details={
-                          <FileDetails
-                            current={current}
-                            model={model}
-                            compare={compare}
-                            setCompare={setCompare}
-                            href={href}
-                            withActivePanel={withActivePanel}
-                          />
-                        }
-                      />
-                    ) : (
-                      <DocumentPreview
-                        fileId={current.id}
-                        preview={{
-                          kind: "unavailable",
-                          title: current.displayName,
-                          reason: "Este formato no tiene vista previa. Puede descargar el archivo.",
-                        }}
-                        downloadUrl={`/api/files/${current.id}/download`}
-                        details={
-                          <FileDetails
-                            current={current}
-                            model={model}
-                            compare={compare}
-                            setCompare={setCompare}
-                            href={href}
-                            withActivePanel={withActivePanel}
-                          />
-                        }
-                      />
-                    )}
-                  </>
-                )}
 
-                {model.trash && (
-                  <FileDetails
-                    current={current}
-                    model={model}
-                    compare={compare}
-                    setCompare={setCompare}
-                    href={href}
-                    withActivePanel={withActivePanel}
-                  />
-                )}
-              </aside>
-            )}
+            </section>
+
           </div>
         </section>
       </div>
+      {graphPreviewFile && (
+        <DocumentPreview
+          key={`graph-preview:${graphPreviewFile.id}`}
+          fileId={graphPreviewFile.id}
+          preview={graphPreviewFile.preview ?? {
+            kind: "unavailable",
+            title: graphPreviewFile.displayName,
+            reason: "Este formato no tiene vista previa. Puede descargar el archivo.",
+          }}
+          downloadUrl={`/api/files/${graphPreviewFile.id}/download`}
+          details={
+            <FileDetails
+              current={graphPreviewFile}
+              model={model}
+              compare={compare}
+              setCompare={setCompare}
+              href={href}
+              withActivePanel={withActivePanel}
+              editOpen={editModalId === graphPreviewFile.id}
+            />
+          }
+          expandedOnMount
+          onDismiss={() => { setGraphPreviewId(null); setEditModalId(null); }}
+        />
+      )}
     </main>
   );
 }

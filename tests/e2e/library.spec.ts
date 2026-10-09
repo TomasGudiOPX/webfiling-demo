@@ -12,6 +12,68 @@ async function profile(page: Page, id: string) {
 }
 const files = (page: Page) => page.locator("[data-file-id]");
 
+test("expanded manager defaults to Tabla, puts filters first and clears URL state", async ({ page }) => {
+  await profile(page, "manager");
+  await page.goto("/file?browse=1&view=grid");
+  await page.locator(".library-results").getByRole("button", { name: "Ampliar vista" }).click();
+  const views = page.getByRole("navigation", { name: "Vista de archivos" });
+  await expect(views.getByRole("link", { name: "Tabla" })).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(".library-table")).toBeVisible();
+  expect(await page.evaluate(() => {
+    const controls = document.querySelector(".project-file-controls")!;
+    const results = document.querySelector(".library-files")!;
+    return Boolean(controls.compareDocumentPosition(results) & Node.DOCUMENT_POSITION_FOLLOWING);
+  })).toBe(true);
+  const typeOptions = page.locator('.project-file-search select[name="type"] option');
+  const optionLabels = await typeOptions.allTextContents();
+  expect(optionLabels).toContain("Plano");
+  expect(optionLabels).not.toContain("plan");
+  await expect(page.locator(".project-advanced-filters")).not.toHaveAttribute("open", "");
+  await page.getByRole("searchbox", { name: "Buscar archivos", exact: true }).fill("modal-clear-no-match");
+  await page.getByRole("button", { name: "Aplicar filtros" }).click();
+  await expect(page).toHaveURL(/q=modal-clear-no-match/);
+  await expect(page.getByText("No hay archivos en esta selección")).toBeVisible();
+  await page.getByRole("link", { name: "Limpiar filtros" }).click();
+  await expect(page).not.toHaveURL(/q=/);
+  await expect(files(page).first()).toBeVisible();
+});
+
+test("upload destinations and linked project details remain available", async ({
+  page,
+}) => {
+  await profile(page, "manager");
+  await page.goto("/file?collection=collection-project-project-costa-norte");
+  await page
+    .getByRole("button", { name: "Cargar archivo", exact: true })
+    .click();
+  const destinations = page.getByLabel("Colección de destino");
+  await expect(destinations.locator("option")).not.toHaveCount(0);
+  await destinations.selectOption("collection-project-project-costa-norte");
+  const name = "linked-project-" + Date.now() + ".md";
+  await page.getByLabel("Archivo", { exact: true }).setInputFiles({
+    name,
+    mimeType: "text/markdown",
+    buffer: Buffer.from("# Proyecto vinculado"),
+  });
+  await page.getByRole("button", { name: "Guardar archivo" }).click();
+  await expect(page.locator(".library-detail > h2")).toHaveText(name);
+  await page
+    .locator(".library-detail")
+    .getByRole("button", { name: "Ampliar vista" })
+    .click();
+  await page.getByText("Organizar archivo", { exact: true }).click();
+  await page.getByLabel("Parque Industrial", { exact: true }).check();
+  await page.getByRole("button", { name: "Guardar organización" }).click();
+  const projectLink = page.getByRole("link", {
+    name: "Parque Industrial",
+    exact: true,
+  });
+  await expect(projectLink).toBeVisible();
+  await projectLink.click();
+  await expect(page).toHaveURL(/\/file\/parque-industrial\?selected=/);
+  await expect(page.locator(".library-detail > h2")).toHaveText(name);
+});
+
 test("four profiles use all three views on desktop and mobile without overflow", async ({
   page,
 }, info) => {
@@ -24,11 +86,21 @@ test("four profiles use all three views on desktop and mobile without overflow",
       "system-administrator",
     ]) {
       await profile(page, id);
+      const sidebar = page.locator(".library-sidebar");
+      await expect(sidebar).toContainText("Todos los archivos");
+      await expect(sidebar).toContainText("Papelera");
+      await expect(sidebar).not.toContainText("COLECCIONES");
+      await expect(sidebar).not.toContainText("Proyectos vinculados");
+      await expect(sidebar.getByRole("link")).toHaveCount(2);
+      await page
+        .locator(".library-results")
+        .getByRole("button", { name: "Ampliar vista" })
+        .click();
       const ids = await files(page).evaluateAll((elements) =>
         elements.map((e) => e.getAttribute("data-file-id")).sort(),
       );
       expect(ids.length).toBeGreaterThan(0);
-      for (const view of ["Lista", "Cuadrícula", "Carpetas"]) {
+      for (const view of ["Lista", "Tabla", "Carpetas"]) {
         await page
           .getByRole("navigation", { name: "Vista de archivos" })
           .getByRole("link", { name: view, exact: true })
@@ -54,10 +126,18 @@ test("four profiles use all three views on desktop and mobile without overflow",
               scrollWidth: element.scrollWidth,
               clientWidth: element.clientWidth,
             }))
-            .filter((element) => element.scrollWidth > element.clientWidth + 10 || element.right > document.documentElement.clientWidth + 2 || element.left < -2)
+            .filter(
+              (element) =>
+                element.scrollWidth > element.clientWidth + 10 ||
+                element.right > document.documentElement.clientWidth + 2 ||
+                element.left < -2,
+            )
             .slice(0, 5),
         }));
-        expect(dimensions.content, JSON.stringify(dimensions.overflowing)).toBeLessThanOrEqual(dimensions.viewport);
+        expect(
+          dimensions.content,
+          JSON.stringify(dimensions.overflowing),
+        ).toBeLessThanOrEqual(dimensions.viewport);
         if (width === 1440)
           expect((await files(page).first().boundingBox())!.y).toBeLessThan(
             900,
@@ -74,10 +154,8 @@ test("four profiles use all three views on desktop and mobile without overflow",
       await expect(
         page.getByRole("link", { name: "Descargar archivo" }),
       ).toBeVisible();
-      await page.getByRole("link", { name: "Volver a resultados" }).click();
-      await expect(
-        page.getByRole("region", { name: "Resultados" }),
-      ).toBeVisible();
+      await page.goto("/file?browse=1");
+      await expect(page.locator(".library-results")).toBeVisible();
     }
   }
 });
@@ -92,16 +170,24 @@ test("queries, filters, selection, refresh and Back survive view changes", async
   await expect(page.locator(".library-detail > h2")).toContainText(
     "presupuesto",
   );
+  await page
+    .locator(".library-results")
+    .getByRole("button", { name: "Ampliar vista" })
+    .click();
   const ids = await files(page).evaluateAll((elements) =>
     elements.map((e) => e.getAttribute("data-file-id")),
   );
   await page
     .getByRole("navigation", { name: "Vista de archivos" })
-    .getByRole("link", { name: "Cuadrícula" })
+    .getByRole("link", { name: "Tabla" })
     .click();
   await expect(page).toHaveURL(/category=finance/);
-  await expect(page).toHaveURL(/view=grid/);
+  await expect(page).toHaveURL(/view=table/);
   await page.reload();
+  await page
+    .locator(".library-results")
+    .getByRole("button", { name: "Ampliar vista" })
+    .click();
   expect(
     await files(page).evaluateAll((elements) =>
       elements.map((e) => e.getAttribute("data-file-id")),
@@ -116,7 +202,7 @@ test("queries, filters, selection, refresh and Back survive view changes", async
   await expect(
     page
       .getByRole("navigation", { name: "Vista de archivos" })
-      .getByRole("link", { name: "Cuadrícula" }),
+      .getByRole("link", { name: "Tabla" }),
   ).toHaveAttribute("aria-current", "page");
   await page.goto("/file?q=no-hay-este-archivo");
   await expect(
@@ -184,6 +270,9 @@ test("real upload, organization, project links, folders, trash, restore and samp
   await page
     .getByRole("button", { name: "Cargar archivo", exact: true })
     .click();
+  const destinations = page.getByLabel("Colección de destino");
+  await expect(destinations.locator("option")).not.toHaveCount(0);
+  await destinations.selectOption("collection-project-project-costa-norte");
   const name = "carga-" + Date.now() + ".md";
   await page.getByLabel("Archivo", { exact: true }).setInputFiles({
     name,
@@ -215,7 +304,10 @@ test("real upload, organization, project links, folders, trash, restore and samp
   await expect(page.locator(".library-detail > h2")).toContainText(
     "Organizado",
   );
-  await page.goto("/file/parque-industrial?selected=" + selected);
+  await page
+    .getByRole("link", { name: "Parque Industrial", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/file\/parque-industrial\?selected=/);
   await expect(page.locator(".library-detail > h2")).toContainText(
     "Organizado",
   );
@@ -253,9 +345,8 @@ test("real upload, organization, project links, folders, trash, restore and samp
     );
   await page.waitForURL(
     (url) =>
-      url.searchParams
-        .get("message")
-        ?.startsWith("Ejemplos restablecidos") ?? false,
+      url.searchParams.get("message")?.startsWith("Ejemplos restablecidos") ??
+      false,
   );
   await expect(page.getByRole("status")).toContainText(
     "Ejemplos restablecidos",
@@ -314,11 +405,15 @@ for (const width of [1440, 390]) {
       await expect(page.locator(".library-detail > h2")).toHaveText(
         "Nuevo " + name,
       );
-      await page.getByRole("link", { name: "Volver a resultados" }).click();
+      await page.goto("/file?browse=1");
+      await page
+        .locator(".library-results")
+        .getByRole("button", { name: "Ampliar vista" })
+        .click();
       await page.getByLabel("Buscar archivos").fill(name);
-      await page.getByRole("button", { name: "Buscar", exact: true }).click();
+      await page.getByRole("button", { name: "Aplicar filtros", exact: true }).click();
       await expect(files(page)).toHaveCount(1);
-      for (const view of ["Lista", "Cuadrícula", "Carpetas"]) {
+      for (const view of ["Lista", "Tabla", "Carpetas"]) {
         const link = page
           .getByRole("navigation", { name: "Vista de archivos" })
           .getByRole("link", { name: view, exact: true });
@@ -429,6 +524,10 @@ test("keyboard-only folder navigation, selection, view switching and focus retur
 }, info) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/file?view=folders");
+  await page
+    .locator(".library-results")
+    .getByRole("button", { name: "Ampliar vista" })
+    .click();
   const tabUntil = async (selector: string) => {
     for (let i = 0; i < 90; i++) {
       await page.keyboard.press("Tab");
@@ -455,15 +554,21 @@ test("keyboard-only folder navigation, selection, view switching and focus retur
   let viewFocused = false;
   for (let i = 0; i < 100; i++) {
     await page.keyboard.press("Shift+Tab");
-    if (await page.locator('.library-toolbar nav a[href*="view=grid"]').evaluate((node) => node === document.activeElement)) {
+    if (
+      await page
+        .locator('.project-file-views a[href*="view=table"]')
+        .evaluate((node) => node === document.activeElement)
+    ) {
       viewFocused = true;
       break;
     }
   }
   expect(viewFocused).toBe(true);
-  await expect(page.locator('.library-toolbar nav a[href*="view=grid"]')).toBeFocused();
+  await expect(
+    page.locator('.project-file-views a[href*="view=table"]'),
+  ).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/view=grid/);
+  await expect(page).toHaveURL(/view=table/);
   expect(
     await page.evaluate(
       () =>

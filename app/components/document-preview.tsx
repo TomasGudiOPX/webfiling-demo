@@ -3,7 +3,14 @@ import * as mammoth from "mammoth/mammoth.browser";
 import { renderMarkdown } from "./markdown";
 import type { PreviewDescriptor } from "../types";
 
-type Props = { fileId: string; preview: PreviewDescriptor; details?: ReactNode; downloadUrl?: string };
+type Props = {
+  fileId: string;
+  preview: PreviewDescriptor;
+  details?: ReactNode;
+  downloadUrl?: string;
+  expandedOnMount?: boolean;
+  onDismiss?: () => void;
+};
 const source = (fileId: string) =>
   `/api/files/${encodeURIComponent(fileId)}/preview`;
 
@@ -122,19 +129,27 @@ function PreviewContent({
   );
 }
 
-export function DocumentPreview({ fileId, preview, details, downloadUrl }: Props) {
-  const [expanded, setExpanded] = useState(false);
+export function DocumentPreview({ fileId, preview, details, downloadUrl, expandedOnMount = false, onDismiss }: Props) {
+  const [expanded, setExpanded] = useState(expandedOnMount);
   const url = source(fileId);
   const canExpand = preview.kind !== "unavailable" || Boolean(details);
+  const dismiss = () => {
+    setExpanded(false);
+    onDismiss?.();
+  };
+
+  useEffect(() => {
+    if (expandedOnMount) setExpanded(true);
+  }, [expandedOnMount]);
 
   useEffect(() => {
     if (!expanded) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setExpanded(false);
+      if (event.key === "Escape") dismiss();
     };
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [expanded]);
+  }, [expanded, onDismiss]);
 
   return (
     <>
@@ -175,7 +190,7 @@ export function DocumentPreview({ fileId, preview, details, downloadUrl }: Props
         <div
           className="preview-backdrop"
           role="presentation"
-          onMouseDown={() => setExpanded(false)}
+          onMouseDown={dismiss}
         >
           <section
             className="preview-dialog"
@@ -189,7 +204,7 @@ export function DocumentPreview({ fileId, preview, details, downloadUrl }: Props
               <button
                 type="button"
                 autoFocus
-                onClick={() => setExpanded(false)}
+                onClick={dismiss}
               >
                 Cerrar
               </button>

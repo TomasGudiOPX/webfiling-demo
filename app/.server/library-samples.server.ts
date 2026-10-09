@@ -139,6 +139,42 @@ export function seedLibrarySamples(db: DatabaseSync): Promise<void> {
         "UPDATE library_file_metadata SET sample_owned=1 WHERE file_id=?",
       ).run(file.id);
     }
+    const trashSamples = [
+      [
+        "trash-plan",
+        "Plano de instalaciones obsoleto.md",
+        "# Plano obsoleto\n\nArchivo ficticio enviado a la papelera para demostración.",
+      ],
+      [
+        "trash-report",
+        "Informe semanal duplicado.txt",
+        "Informe ficticio duplicado. Puede restaurarse desde la papelera.",
+      ],
+      [
+        "trash-note",
+        "Nota de coordinación de prueba.md",
+        "# Nota de prueba\n\nContenido ficticio para mostrar la papelera.",
+      ],
+    ] as const;
+    for (const [key, name, text] of trashSamples) {
+      if (
+        db
+          .prepare("SELECT id FROM files WHERE stable_identity=?")
+          .get("sample-managed:" + key)
+      )
+        continue;
+      const file = await saveManagedUpload("system-administrator", {
+        collectionId: "collection-administration",
+        file: new File([text], name),
+      }, db);
+      const now = new Date().toISOString();
+      db.prepare(
+        "UPDATE files SET stable_identity=?,demo_owned=1 WHERE id=?",
+      ).run("sample-managed:" + key, file.id);
+      db.prepare(
+        "UPDATE library_file_metadata SET sample_owned=1,trashed_at=?,updated_at=? WHERE file_id=?",
+      ).run(now, now, file.id);
+    }
     for (const [folderPath, name] of constructionDocs) {
       const key = "construction-" + folderPath + "/" + name;
       if (db.prepare("SELECT id FROM files WHERE stable_identity=?").get("sample-managed:" + key)) continue;

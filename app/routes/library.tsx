@@ -3,7 +3,6 @@ import { useLocation, useLoaderData } from "react-router";
 import FileLibrary from "../components/file-library";
 import ProjectShowcase from "../components/project-showcase";
 import AgentSections from "../components/agent-sections";
-import DummyCalendar from "../components/dummy-calendar";
 import type { browserModel } from "../.server/file-browser.server";
 
 export default function FileEntry() {
@@ -18,7 +17,7 @@ export default function FileEntry() {
   const settingsDenied = params.has("settingsDenied");
   return (
     <>
-      {browse ? <><FileLibrary />{/* Original live calendar: <CollectionCalendar collections={model.collections} /> */}<DummyCalendar /></> : <ProjectShowcase />}
+      {browse ? <><FileLibrary />{/* Original live calendar: <CollectionCalendar collections={model.collections} /> */}</> : <ProjectShowcase />}
       {legacyRulesDenied && <p className="agent-note" role="status">La configuración del calendario está disponible solo para Administrador del sistema, en Configuración → Calendario.</p>}
       {settingsDenied && <p className="agent-note" role="status">La configuración del calendario está disponible solo para Administrador del sistema.</p>}
       <AgentSections active={section} />

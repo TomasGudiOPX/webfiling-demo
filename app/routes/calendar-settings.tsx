@@ -1,5 +1,6 @@
 import { redirect, useLoaderData, type LoaderFunctionArgs } from "react-router";
 import AgentSections from "../components/agent-sections";
+import DummyCalendar from "../components/dummy-calendar";
 import { ShowcaseHeader } from "../components/showcase-header";
 import { browserModel } from "../.server/file-browser.server";
 import { privateHeaders } from "../.server/file-content.server";
@@ -22,6 +23,7 @@ export default function CalendarSettings() {
     <main className="shell calendar-settings-shell">
       <ShowcaseHeader profile={model.profile} settingsPage />
       <AgentSections active="settings" />
+      <DummyCalendar />
     </main>
   );
 }

@@ -1,8 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router";
 import type { RelationGraph as RelationGraphData } from "../types";
-import type { SearchFilters } from "../search-filters";
-import { workspaceUrl } from "../search-filters";
 import {
   RelationScene,
   RELATION_STYLES,
@@ -67,51 +64,62 @@ function connectContext(graph: RelationGraphData): BrainGraph {
 export function RelationGraph({
   graph,
   selectedId,
-  projectSlug,
-  preserve,
-  onSelect,
-  fileHref,
+  onSelectFile,
+  onOpenFile,
+  modalOpen = false,
 }: {
   graph: RelationGraphData;
   selectedId?: string;
-  projectSlug: string;
-  preserve: Partial<SearchFilters>;
-  onSelect?: () => void;
-  fileHref?: (fileId: string) => string;
+  onSelectFile?: (fileId: string) => void;
+  onOpenFile?: (fileId: string) => void;
+  modalOpen?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneRef = useRef<RelationScene | null>(null);
-  const navigate = useNavigate();
   const [paused, setPaused] = useState(false);
-  const pausedRef = useRef(paused);
-  pausedRef.current = paused;
-  const selectedRef = useRef(selectedId);
-  selectedRef.current = selectedId;
-  const navRef = useRef({ projectSlug, preserve, fileHref });
-  navRef.current = { projectSlug, preserve, fileHref };
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [groupValue, setGroupValue] = useState<string | null>(null);
+  const [groupPositions, setGroupPositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [groupPositionsLoaded, setGroupPositionsLoaded] = useState(false);
+  const sceneContainerRef = useRef<HTMLDivElement | null>(null);
+  const groupDragRef = useRef<{ id: string; startX: number; startY: number; moved: boolean } | null>(null);
+  const suppressGroupClickRef = useRef(false);
+  const onSelectFileRef = useRef(onSelectFile);
+  onSelectFileRef.current = onSelectFile;
+  const onOpenFileRef = useRef(onOpenFile);
+  onOpenFileRef.current = onOpenFile;
+  const sceneStateRef = useRef({ paused, focusedId, query, modalOpen, selectedId, groupValue, groupCenters: {} as Record<string, { x: number; y: number }> });
 
-  const linkFor = (nodeId: string) => {
-    const { projectSlug, preserve, fileHref } = navRef.current;
-    return fileHref
-      ? fileHref(nodeId)
-      : workspaceUrl(projectSlug, preserve, nodeId);
-  };
-
-  const activate = (nodeId: string) => {
-    const scrollY = typeof window !== "undefined" ? window.scrollY : 0;
-    const scrollX = typeof window !== "undefined" ? window.scrollX : 0;
-    onSelect?.();
-    navigate(linkFor(nodeId), { preventScrollReset: true, replace: true });
-    if (typeof window !== "undefined") {
-      requestAnimationFrame(() => {
-        if (window.scrollY !== scrollY) {
-          window.scrollTo(scrollX, scrollY);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("webfiling-demo:relation-group-positions");
+      if (saved) {
+        const parsed: unknown = JSON.parse(saved);
+        if (parsed && typeof parsed === "object") {
+          setGroupPositions(Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, { x: number; y: number }] => {
+            const value = entry[1] as { x?: unknown; y?: unknown };
+            return typeof value?.x === "number" && Number.isFinite(value.x) && typeof value.y === "number" && Number.isFinite(value.y);
+          })));
         }
-      });
+      }
+    } catch {
+      // Ignore invalid saved positions and keep the default layout.
     }
-  };
-  const activateRef = useRef(activate);
-  activateRef.current = activate;
+    setGroupPositionsLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!groupPositionsLoaded) return;
+    const timer = window.setTimeout(() => {
+      try {
+        localStorage.setItem("webfiling-demo:relation-group-positions", JSON.stringify(groupPositions));
+      } catch {
+        // Keep dragging available when browser storage is unavailable.
+      }
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [groupPositions, groupPositionsLoaded]);
 
   const brainGraph = useMemo(() => connectContext(graph), [graph]);
   const graphKey = useMemo(
@@ -131,10 +139,20 @@ export function RelationGraph({
       canvas,
       brainGraph,
       () => ({
-        selectedId: selectedRef.current ?? null,
-        paused: pausedRef.current,
+        selectedId: sceneStateRef.current.selectedId ?? null,
+        paused: sceneStateRef.current.paused,
+        focusedId: sceneStateRef.current.focusedId,
+        searchQuery: sceneStateRef.current.query,
+        modalOpen: sceneStateRef.current.modalOpen,
+        groupBy: "projectId",
+        groupValue: sceneStateRef.current.groupValue,
+        groupCenters: sceneStateRef.current.groupCenters,
       }),
-      (nodeId) => activateRef.current(nodeId),
+      (nodeId) => {
+        setFocusedId(nodeId || null);
+        if (nodeId) onSelectFileRef.current?.(nodeId);
+      },
+      (nodeId) => onOpenFileRef.current?.(nodeId),
     );
     sceneRef.current = scene;
     return () => {
@@ -145,7 +163,7 @@ export function RelationGraph({
 
   useEffect(() => {
     sceneRef.current?.refresh();
-  }, [selectedId, paused]);
+  }, [selectedId, paused, focusedId, query, modalOpen, groupValue, groupPositions]);
 
   const visibleEdges = brainGraph.edges;
   const relationTypes = useMemo(
@@ -156,6 +174,58 @@ export function RelationGraph({
     () => [...new Set(graph.nodes.map((node) => node.status))],
     [graph],
   );
+  const projectOptions = useMemo(() => {
+    const projects = new Map<string, string>();
+    for (const node of graph.nodes) {
+      for (const project of node.projects ?? []) projects.set(project.id, project.name);
+    }
+    return [...projects].sort((a, b) => a[1].localeCompare(b[1], "es"));
+  }, [graph]);
+  const groupCenters = Object.fromEntries(projectOptions.map(([id], index) => [
+    id,
+    groupPositions[id] ?? { x: index % 2 === 0 ? 0.24 : 0.76, y: index < 2 ? 0.28 : 0.72 },
+  ]));
+  sceneStateRef.current = { paused, focusedId, query, modalOpen, selectedId, groupValue, groupCenters };
+  const hasProjectGroups = projectOptions.length > 0;
+  const groupLabels = {
+    projectId: "Obra",
+    categoryId: "Categoría",
+    disciplineTag: "Disciplina",
+    locationTag: "Ubicación",
+  } as const;
+  const groupModes = (Object.keys(groupLabels) as Array<keyof typeof groupLabels>)
+    .filter((key) => key !== "projectId" || hasProjectGroups);
+  const nodeInGroup = (node: (typeof graph.nodes)[number], value: string) =>
+    (node.projects ?? []).some((project) => project.id === value);
+  const selectGroup = (value: string) => {
+    setFocusedId(null);
+    setGroupValue(groupValue === value ? null : value);
+  };
+  const moveGroupPosition = (id: string, clientX: number, clientY: number) => {
+    const bounds = sceneContainerRef.current?.getBoundingClientRect();
+    if (!bounds?.width || !bounds.height) return;
+    const canvas = canvasRef.current;
+    const zoom = Number(canvas?.dataset.zoom) || 1;
+    const panX = Number(canvas?.dataset.panX) || 0;
+    const panY = Number(canvas?.dataset.panY) || 0;
+    const worldX = ((clientX - bounds.left) - bounds.width / 2 - panX) / zoom + bounds.width / 2;
+    const worldY = ((clientY - bounds.top) - bounds.height * 0.48 - panY) / zoom + bounds.height * 0.48;
+    setGroupPositions((current) => ({
+      ...current,
+      [id]: {
+        x: Math.max(0.08, Math.min(0.92, worldX / bounds.width)),
+        y: Math.max(0.1, Math.min(0.9, worldY / bounds.height)),
+      },
+    }));
+  };
+  const matchingCount = graph.nodes.filter((node) =>
+    node.label.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es")),
+  ).length;
+
+  const resetView = () => {
+    setFocusedId(null);
+    sceneRef.current?.resetView();
+  };
 
   return (
     <div className="relation-graph brain-graph" data-testid="relation-graph">
@@ -175,17 +245,104 @@ export function RelationGraph({
           {paused ? "Reanudar animación" : "Pausar animación"}
         </button>
       </div>
-      <div className="relation-scene">
+      <div className="relation-tools">
+        <label>
+          Buscar en el mapa
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.currentTarget.value)}
+            placeholder="Nombre del archivo"
+            aria-label="Buscar archivos del gráfico"
+          />
+        </label>
+        <button
+          type="button"
+          className="relation-group-reset"
+          onClick={() => { setFocusedId(null); setGroupValue(null); }}
+          disabled={!groupValue}
+        >
+          Quitar agrupación
+        </button>
+        <div className="relation-camera" role="group" aria-label="Controles de vista del gráfico">
+          <button type="button" aria-label="Alejar gráfico" onClick={() => sceneRef.current?.zoomBy(0.8)}>−</button>
+          <button type="button" aria-label="Acercar gráfico" onClick={() => sceneRef.current?.zoomBy(1.25)}>+</button>
+          <button type="button" onClick={resetView}>Restablecer vista</button>
+        </div>
+      </div>
+      {query.trim() && (
+        <p className="relation-search-status" role="status">
+          {matchingCount ? `${matchingCount} coincidencia(s)` : "No se encontraron archivos"}
+        </p>
+      )}
+      <div className="relation-scene" ref={sceneContainerRef}>
+        <div className="relation-obra-controls" role="group" aria-label="Agrupar archivos por obra">
+          {projectOptions.map(([id, name]) => {
+            const position = groupCenters[id];
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={groupValue === id}
+                data-project-group={id}
+                title="Arrastra para mover el grupo; usa las flechas para ajustarlo."
+                style={{ left: `${position.x * 100}%`, top: `${position.y * 100}%` }}
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return;
+                  groupDragRef.current = { id, startX: event.clientX, startY: event.clientY, moved: false };
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                }}
+                onPointerMove={(event) => {
+                  const drag = groupDragRef.current;
+                  if (!drag || drag.id !== id) return;
+                  if (!drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 4) return;
+                  drag.moved = true;
+                  moveGroupPosition(id, event.clientX, event.clientY);
+                }}
+                onPointerUp={() => {
+                  if (groupDragRef.current?.id !== id) return;
+                  suppressGroupClickRef.current = groupDragRef.current.moved;
+                  groupDragRef.current = null;
+                }}
+                onPointerCancel={() => {
+                  groupDragRef.current = null;
+                  suppressGroupClickRef.current = false;
+                }}
+                onClick={(event) => {
+                  if (suppressGroupClickRef.current) {
+                    suppressGroupClickRef.current = false;
+                    event.preventDefault();
+                    return;
+                  }
+                  selectGroup(id);
+                }}
+                onKeyDown={(event) => {
+                  const step = event.shiftKey ? 0.04 : 0.015;
+                  const delta = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[event.key];
+                  if (!delta) return;
+                  event.preventDefault();
+                  const current = groupCenters[id];
+                  setGroupPositions((positions) => ({
+                    ...positions,
+                    [id]: { x: Math.max(0.08, Math.min(0.92, current.x + delta[0])), y: Math.max(0.1, Math.min(0.9, current.y + delta[1])) },
+                  }));
+                }}
+              >
+                {name}
+              </button>
+            );
+          })}
+        </div>
         <canvas
           ref={canvasRef}
           className="relation-canvas"
           role="img"
-          aria-label={`Red de conocimiento con ${graph.nodes.length} archivos y ${visibleEdges.length} vínculos. Seleccioná un nodo para abrirlo; al enfocarlo se iluminan sus conexiones.`}
+          aria-label={`Red de conocimiento con ${graph.nodes.length} archivos y ${visibleEdges.length} vínculos. Haz clic en un nodo para seleccionarlo y doble clic para abrir su vista previa.`}
+          tabIndex={0}
         />
       </div>
       <p className="brain-hint">
-        Pasá el cursor por un nodo para activar sus conexiones; hacé clic para
-        abrir el archivo. Arrastrá nodos para explorar la red.
+        Haz clic en un nodo para seleccionarlo; doble clic para abrir su vista previa. Arrastra el nombre de una obra para mover su grupo, un nodo para moverlo o el fondo para desplazar el mapa.
       </p>
 
       <svg width="0" height="0" aria-hidden="true" className="relation-defs">
@@ -210,16 +367,21 @@ export function RelationGraph({
       >
         {graph.nodes.map((node) => (
           <li key={node.id}>
-            <Link
-              to={linkFor(node.id)}
-              preventScrollReset
-              replace
-              onClick={onSelect}
-              aria-label={`${node.label}, ${STATUS_LABELS[node.status] ?? node.status}`}
-              aria-current={node.id === selectedId ? "true" : undefined}
+            <button
+              type="button"
+              onClick={(event) => {
+                if (event.detail === 0) onOpenFileRef.current?.(node.id);
+                else {
+                  setFocusedId(node.id);
+                  onSelectFileRef.current?.(node.id);
+                }
+              }}
+              onDoubleClick={() => onOpenFileRef.current?.(node.id)}
+              data-graph-file-id={node.id}
+              aria-pressed={node.id === focusedId}
             >
               {node.label}
-            </Link>
+            </button>
           </li>
         ))}
       </ul>
