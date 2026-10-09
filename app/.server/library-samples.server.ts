@@ -61,6 +61,12 @@ export function seedLibrarySamples(db: DatabaseSync): Promise<void> {
       ["PROYECTOS/PRJ-COM26-005_Mall_Comercial_Paseo_del_Valle/00_FICHA_Y_CONTRATO", "Ficha_tecnica_Mall_Paseo_del_Valle.md"],
       ["PROYECTOS/PRJ-COM26-005_Mall_Comercial_Paseo_del_Valle/02_DOCUMENTACION_TECNICA", "Memoria_de_instalaciones.md"],
     ];
+    constructionDocs.push(
+      ...Array.from({ length: 48 }, (_, index) => [
+        constructionFolders[index % constructionFolders.length],
+        `Anexo_de_demostracion_${String(index + 1).padStart(2, "0")}.md`,
+      ]),
+    );
     const sampleFolderIds = new Map<string, string>();
     const existingRoot = db.prepare("SELECT id FROM managed_folders WHERE id=?").get("sample-construction-root") as {id:string}|undefined;
     if (!existingRoot) {
