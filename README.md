@@ -143,6 +143,8 @@ docker compose up --build
 
 SQLite persists in `webfiling-data`; uploads persist in the separate `webfiling-managed-files` volume. Back up/restore both. The source mount stays read-only. Set `SOURCE_ROOT_HOST` only after confirming Docker Desktop can read the Windows/SMB mapping. Browser input never selects a physical source path.
 
+When deployed behind a TLS-terminating reverse proxy, set `PUBLIC_ORIGIN` on the web container to the browser-facing origin (for example, `https://webfiling.openix.net.ar`). This keeps same-origin checks and the signed demo-profile cookie aligned with the public HTTPS URL.
+
 Use a controlled office-network host with read-only source credentials. There is no production SSO, permission editor, Windows ACL sync, OCR, offline synchronization, malware scanning, or public-sharing feature. Already downloaded bytes cannot be revoked.
 
 ## Verification

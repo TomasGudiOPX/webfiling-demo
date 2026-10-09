@@ -6,6 +6,7 @@ export interface AppConfig {
   sourceRoot: string;
   managedStorageRoot: string;
   demoMode: boolean;
+  publicOrigin: string | null;
   indexIntervalSeconds: number;
   sessionSecret: string;
 }
@@ -22,6 +23,21 @@ export function getConfig(): AppConfig {
     process.env.INDEX_INTERVAL_SECONDS ?? "300",
   );
   const demoMode = (process.env.DEMO_MODE ?? "true").toLowerCase() === "true";
+  const configuredPublicOrigin = process.env.PUBLIC_ORIGIN?.trim();
+  let publicOrigin: string | null = null;
+  if (configuredPublicOrigin) {
+    try {
+      const parsed = new URL(configuredPublicOrigin);
+      if (
+        !["http:", "https:"].includes(parsed.protocol) ||
+        parsed.username || parsed.password || parsed.pathname !== "/" ||
+        parsed.search || parsed.hash
+      ) throw new Error();
+      publicOrigin = parsed.origin;
+    } catch {
+      throw new Error("Configuration error: PUBLIC_ORIGIN must be an HTTP(S) origin without a path.");
+    }
+  }
   const sessionSecret =
     process.env.SESSION_SECRET ?? (demoMode ? "demo-only-secret" : "");
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -62,6 +78,7 @@ export function getConfig(): AppConfig {
     sourceRoot,
     managedStorageRoot,
     demoMode,
+    publicOrigin,
     indexIntervalSeconds,
     sessionSecret,
   };

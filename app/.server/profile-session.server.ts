@@ -60,7 +60,8 @@ export function resolveDemoProfile(request: Request): DemoProfileId {
 
 export function assertSameOrigin(request: Request): void {
   const origin = request.headers.get("Origin");
-  if (!origin || origin !== new URL(request.url).origin)
+  const expectedOrigin = getConfig().publicOrigin ?? new URL(request.url).origin;
+  if (!origin || origin !== expectedOrigin)
     throw new ProfileContextError("Profile changes require a same-origin request.", 403);
 }
 
@@ -76,7 +77,8 @@ export async function switchDemoProfile(
   const profileId = String(form.get("profileId") ?? "");
   if (!profileIds.has(profileId as DemoProfileId))
     throw new ProfileContextError("The selected demo profile is invalid.");
-  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  const publicUrl = getConfig().publicOrigin ?? request.url;
+  const secure = new URL(publicUrl).protocol === "https:" ? "; Secure" : "";
   return {
     profileId: profileId as DemoProfileId,
     setCookie: `${COOKIE_NAME}=${profileId}.${signature(profileId)}; Path=/; HttpOnly; SameSite=Lax${secure}`,

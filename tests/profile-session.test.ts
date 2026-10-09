@@ -8,6 +8,7 @@ import {
 
 const originalDemoMode = process.env.DEMO_MODE;
 const originalSessionSecret = process.env.SESSION_SECRET;
+const originalPublicOrigin = process.env.PUBLIC_ORIGIN;
 
 function request(
   cookie?: string,
@@ -72,4 +73,36 @@ test("profile switching is disabled outside demo mode", async () => {
   );
   process.env.DEMO_MODE = originalDemoMode;
   process.env.SESSION_SECRET = originalSessionSecret;
+});
+
+test("profile switching behind TLS proxy uses the configured public origin and secure cookie", async () => {
+  process.env.DEMO_MODE = "true";
+  process.env.SESSION_SECRET = "profile-test-secret";
+  process.env.PUBLIC_ORIGIN = "https://webfiling.openix.net.ar/";
+  try {
+    const proxiedRequest = new Request("http://web:3000/api/demo-profile", {
+      method: "POST",
+      headers: {
+        Origin: "https://webfiling.openix.net.ar",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ profileId: "manager" }),
+    });
+    const switched = await switchDemoProfile(proxiedRequest);
+    assert.equal(switched.profileId, "manager");
+    assert.match(switched.setCookie, /; Secure$/);
+    const foreignOrigin = new Request("http://web:3000/api/demo-profile", {
+      method: "POST",
+      headers: {
+        Origin: "https://attacker.example",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ profileId: "manager" }),
+    });
+    await assert.rejects(() => switchDemoProfile(foreignOrigin), ProfileContextError);
+  } finally {
+    process.env.DEMO_MODE = originalDemoMode;
+    process.env.SESSION_SECRET = originalSessionSecret;
+    process.env.PUBLIC_ORIGIN = originalPublicOrigin;
+  }
 });
